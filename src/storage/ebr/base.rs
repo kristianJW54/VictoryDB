@@ -1,23 +1,17 @@
 use std::mem::MaybeUninit;
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicPtr, AtomicUsize};
 //
 //
-//
-// At it's core, EBR is uses a global structure to manage epochs and references to objects.
-// Local participants (threads) hold references to objects and have a local cache of unlinked objects
-//
-// Global holds a intrusive linked list of all threads that are currently active
 
 pub(crate) struct GlobalEBR {
-    list: IntrusiveList<EBRThread>,
+    list: ThreadList,
+    pub(crate) epoch: AtomicUsize,
 }
 
 // TODO: Need to make an intrusive linked list of EBRThread
 
-trait ThreadEntry {}
-
-struct IntrusiveList<E: ThreadEntry> {
-    head: AtomicPtr<E>, // TODO: To replace with custom Atomic structure
+struct ThreadList {
+    head: AtomicPtr<EBRThread>, // TODO: To replace with custom Atomic structure
 }
 
 pub(crate) struct EBRThread {
@@ -28,8 +22,6 @@ pub(crate) struct EBRThread {
     // GC Cache
     // Total Pinned for threshold collection
     // Reference to the global data (Collector?) // TODO: Need to understand this more
-    // Number of guards keeping this thread pineed
+    // Number of guards keeping this thread pined
     // Number of active handles? // TODO: Need to understand this more
 }
-
-impl ThreadEntry for EBRThread {}
