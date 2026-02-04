@@ -6,6 +6,15 @@ use std::mem::MaybeUninit;
 
 #[test]
 fn basic_array() {
+    #[derive(Debug)]
+    struct Tracked(String);
+
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            println!("Dropping Tracked({:?})", self.0);
+        }
+    }
+
     const SIZE: usize = 10;
 
     // What do we gain by using MaybeUninit?
@@ -13,53 +22,34 @@ fn basic_array() {
     // This is deferred until we want to construct the object
     // So a 1_000_000 size array will not cause 1_000_000 immediate writes to memory
 
-    let mut array = [MaybeUninit::<u8>::uninit(); SIZE];
+    let mut array: [MaybeUninit<Tracked>; SIZE] = std::array::from_fn(|_| MaybeUninit::uninit());
 
     // We write to the first element
     unsafe {
-        array[0].as_mut_ptr().write(2);
-        let first_element = array[0].assume_init();
-        println!("first element: {}", first_element);
+        // Here we allocate heap memory for "Hello" and array[0] stores the pointer + len + cap to the heap memory
+        // Rust does not consider this a live value yet because it is still MaybeUninit
+        array[0].write(Tracked("Hello".to_string()));
+
+        // Here we assume init by taking the pointer bits and becoming the sole owner of the memory - array[0] still has the pointer bytes but they are useless
+        // So we must ensure that assume_init_read is called once
+        // let first_element = array[0].assume_init_read();
+        // println!("first element: {:?}", first_element);
+        // println!("first element: {:?}", first_element);
+        // let first_element_2 = array[0].assume_init_read(); // UB
+
+        // It is better maybe and more readable to use mem::replace
+        let now = std::mem::replace(&mut array[0], MaybeUninit::uninit()).assume_init();
+        println!("now?: {:?}", now);
+        println!("array[0] {:?}", array[0]);
     }
 
-    // Let's try with a String which will drop?
-    #[derive(Debug)]
-    struct Tracked(String);
+    // assume_init copies out the pointer bits and replaces it with a MaybeUninit::uninit()
+    // assume_init_read does the same but it does not replace the value - it effectively copies out the pointer bits making it the sole owner of the memory
 
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            println!("Dropping {}", self.0);
-        }
-    }
-
-    {
-        unsafe {
-            let mut uninit = MaybeUninit::<Tracked>::uninit();
-
-            // If i comment out this - the assume_init() will panic!
-            // let s: &mut String = &mut *uninit.as_mut_ptr();
-            // *s = "World".to_string();
-
-            // This is correct
-            uninit.write(Tracked("World".to_string()));
-
-            // But if we immediately write a new string in place - we leak "World"
-            // We should either drop_in_place (control belongs to us)
-            // Or use assume_init (Control belongs to rust)
-            //
-            // uninit.as_mut_ptr().drop_in_place();
-            //
-            uninit.assume_init_drop();
-
-            // Can I use raw ptr to write?
-            let ptr = &raw mut *uninit.as_mut_ptr();
-            ptr.write(Tracked("Earth".to_string()));
-
-            // assume_init() also gives us drop -- so if we were to implement custom object handling in array - we may want to provide a different access
-            // and implement drop ourselves?
-            println!("string: {:?}", uninit.assume_init());
-
-            // All writes require that the in place object be dropped or that the region is un-initialised
-        }
+    // Let's try to overwrite the first element.
+    unsafe {
+        array[0].as_mut_ptr().write(Tracked("World".to_string()));
+        let first_element = array[0].assume_init_read();
+        println!("first element: {:?}", first_element);
     }
 }
