@@ -1,6 +1,10 @@
 // This is scratch space for toying with different concepts such as MaybeUninit arrays, defer functions and other things.
+use std::cell::Cell;
 use std::mem::MaybeUninit;
-
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+use std::thread;
 // It is important that we do not create references to something which implements drop or that can be dropped before asserting that what is being dropped is initialised memory and aligned etc
 // It is therefore better to use -> & raw mut X <- in order to create a raw reference to the object which we can write to, after we can implement drop ourselves.
 
@@ -52,4 +56,63 @@ fn basic_array() {
         let first_element = array[0].assume_init_read();
         println!("first element: {:?}", first_element);
     }
+}
+
+#[test]
+fn thread_local() {
+    // I want to have a piece of data stored on the heap and be able to store refernce pointers in thread local stacks
+    // Once a thread local has finished reading or if it wants to write to it we must ensure that the pointer is not dropped until other threads that might be
+    // referencing it have unpinned it
+    /*
+
+
+     Thread Lifetime
+
+    |----------------------------------------------------------------------------------------------------|
+    | Pin Scope 1                          |          |                                                  |
+    | |-------------------> END            | Unpinned |                                                  |
+    |               Pin Scope 2            |  State   |                                                  |
+    |               |----------------> END |          |                                                  |
+    |                                      |  Reclaim | Pin Scope 3                                      |
+    |                                      |          | |----------------> END                           |
+    |----------------------------------------------------------------------------------------------------|
+
+    Only inside the scope of a guard can a thread hold shared pointers
+
+    Local epoch only advances once all guard pins == 0
+
+    Thread lifetime
+    ──────────────────────────────────────────────────────────────>
+
+            ┌──────────── pinned region ────────────┐
+            │                                       │
+    [unpinned] ── pin() ──► [pinned] ── unpin() ──► [unpinned]
+      epoch = 0              epoch = E               epoch = 0
+                              (latched once)
+
+    Legend:
+    - epoch = 0        → thread is quiescent (not pinned)
+    - epoch = E        → thread is pinned and advertises epoch E
+    - nested pin()     → does NOT change epoch
+    - epoch only updates when transitioning unpinned → pinned
+
+      */
+
+    // Start with a simple global epoch
+    static GLOBAL: AtomicU32 = AtomicU32::new(1);
+
+    // Without getting into pointer semantics - i want to simply have local threads incrementing their own epoch correctly
+    // and in line with nested guard scopes
+    //
+    // Global epoch advancement:
+    //
+    // - The global epoch may advance from E → E+1 if NO thread is pinned with
+    //   local_epoch < E.
+    // - Pinned threads are allowed to lag behind the global epoch.
+    // - A thread observes newer epochs only by UNPINNING and PINNING again.
+    //
+    // So all threads must have observed the current global epoch.
+    //
+
+    // Local here ->
 }
