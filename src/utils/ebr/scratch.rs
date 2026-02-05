@@ -2,6 +2,7 @@
 use std::cell::Cell;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -79,7 +80,6 @@ fn thread_local() {
 
     Only inside the scope of a guard can a thread hold shared pointers
 
-    Local epoch only advances once all guard pins == 0
 
     Thread lifetime
     ──────────────────────────────────────────────────────────────>
@@ -99,10 +99,10 @@ fn thread_local() {
       */
 
     // Start with a simple global epoch
+    // If we were to really progress this, we would have a singleton gc which would store Arc<Global> and register thread local handles per thread
     static GLOBAL: AtomicU32 = AtomicU32::new(1);
 
-    // Without getting into pointer semantics - i want to simply have local threads incrementing their own epoch correctly
-    // and in line with nested guard scopes
+    // Without getting into pointer semantics, I want to simply build out thread_local pinning and epoch advancement
     //
     // Global epoch advancement:
     //
@@ -115,4 +115,39 @@ fn thread_local() {
     //
 
     // Local here ->
+
+    struct Local {
+        local_epoch: AtomicU32,
+        guarded: AtomicBool,
+        // Would add gc_cache
+    }
+
+    thread_local!(
+        static LOCAL: Local = const {
+            Local {
+                local_epoch: AtomicU32::new(0),
+                guarded: AtomicBool::new(false),
+                // Would add gc_cache
+            }
+        };
+    );
+
+    impl Drop for Local {
+        fn drop(&mut self) {
+            println!("Dropped Local");
+        }
+    }
+
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            LOCAL
+                .try_with(|handle| {
+                    println!(
+                        "local thread created - epoch: {:?}",
+                        handle.local_epoch.load(Ordering::Relaxed)
+                    );
+                })
+                .unwrap()
+        });
+    });
 }
