@@ -2,10 +2,13 @@
 use std::cell::Cell;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::thread;
+
 // It is important that we do not create references to something which implements drop or that can be dropped before asserting that what is being dropped is initialised memory and aligned etc
 // It is therefore better to use -> & raw mut X <- in order to create a raw reference to the object which we can write to, after we can implement drop ourselves.
 
@@ -100,7 +103,32 @@ fn thread_local() {
 
     // Start with a simple global epoch
     // If we were to really progress this, we would have a singleton gc which would store Arc<Global> and register thread local handles per thread
-    static GLOBAL: AtomicU32 = AtomicU32::new(1);
+
+    #[derive(Debug)]
+    struct Global {
+        global_epoch: AtomicU32,
+        local_list: Mutex<Vec<Arc<Local>>>,
+    }
+
+    struct GC {
+        global: Arc<Global>,
+    }
+
+    impl GC {
+        fn register(&self) -> Arc<Local> {
+            Local::register(self)
+        }
+    }
+
+    fn gc() -> &'static GC {
+        static GC: OnceLock<GC> = OnceLock::new();
+        GC.get_or_init(|| GC {
+            global: Arc::new(Global {
+                global_epoch: AtomicU32::new(1),
+                local_list: Mutex::new(Vec::new()),
+            }),
+        })
+    }
 
     // Without getting into pointer semantics, I want to simply build out thread_local pinning and epoch advancement
     //
@@ -116,21 +144,77 @@ fn thread_local() {
 
     // Local here ->
 
+    #[derive(Debug)]
     struct Local {
         local_epoch: AtomicU32,
         guarded: AtomicBool,
         // Would add gc_cache
+        global: Arc<Global>,
     }
 
-    thread_local!(
-        static LOCAL: Local = const {
-            Local {
+    impl Local {
+        // Want to make a register which we can start a local from
+        fn register(global: &GC) -> Arc<Self> {
+            let s = Self {
                 local_epoch: AtomicU32::new(0),
                 guarded: AtomicBool::new(false),
                 // Would add gc_cache
+                global: global.global.clone(),
+            };
+            let local = Arc::new(s);
+            global.global.local_list.lock().unwrap().push(local.clone());
+            local
+        }
+
+        fn pin(&self) -> PinGuard {
+            // With pin we need to do some checks here
+            // We need to first take the global epoch value and insert it into the local epoch
+            // then we flip the gaurded bool
+            // finally we can check if we can increment the global epoch
+            let mut global_epoch = self.global.global_epoch.load(Ordering::Acquire);
+            self.local_epoch.store(global_epoch, Ordering::Release);
+            self.guarded.store(true, Ordering::Release);
+            let p = PinGuard {
+                local: self as *const Local,
+            };
+
+            // This should not be done in the pin - it should be done lazily by global during a collect
+            for local in self.global.local_list.lock().unwrap().iter() {
+                println!("local {:?}", local);
+                if local.guarded.load(Ordering::Acquire) {
+                    let le = local.local_epoch.load(Ordering::Acquire);
+                    if le < global_epoch {
+                        return p;
+                    }
+                }
             }
-        };
+
+            self.global
+                .global_epoch
+                .compare_exchange(
+                    global_epoch,
+                    global_epoch + 1,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .unwrap_or(global_epoch);
+
+            p
+        }
+    }
+
+    struct PinGuard {
+        local: *const Local,
+    }
+
+    thread_local!(
+        // Because gc() uses OnceLock we can be sure that one instance of gc will be created and if there is one then we get that and use register()
+        static LOCAL: Arc<Local> = gc().register()
     );
+
+    fn pin() -> PinGuard {
+        LOCAL.with(|local| local.pin())
+    }
 
     impl Drop for Local {
         fn drop(&mut self) {
@@ -147,7 +231,41 @@ fn thread_local() {
                         handle.local_epoch.load(Ordering::Relaxed)
                     );
                 })
-                .unwrap()
+                .unwrap();
+            // We should try to pin
+            pin();
+            // Check local pin
+            LOCAL.with(|handle| {
+                println!(
+                    "local thread created - epoch: {:?}",
+                    handle.local_epoch.load(Ordering::Relaxed)
+                );
+            });
+        });
+        scope.spawn(|| {
+            LOCAL
+                .try_with(|handle| {
+                    println!(
+                        "second local thread created - epoch: {:?}",
+                        handle.local_epoch.load(Ordering::Relaxed)
+                    );
+                })
+                .unwrap();
+            // We should try to pin
+            pin();
+            // Check local pin
+            LOCAL.with(|handle| {
+                println!(
+                    "second local thread created - epoch: {:?}",
+                    handle.local_epoch.load(Ordering::Relaxed)
+                );
+            });
         });
     });
+
+    // Global epoch should have increased?
+    println!(
+        "global epoch {:?}",
+        LOCAL.with(|local| local.global.global_epoch.load(Ordering::Relaxed))
+    );
 }
