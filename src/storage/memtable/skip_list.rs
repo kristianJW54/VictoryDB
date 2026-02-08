@@ -32,3 +32,7 @@ pub(crate) struct Node {
 struct Header {
     // Fields
 }
+
+pub(crate) struct SkipList {
+    // Fields
+}
