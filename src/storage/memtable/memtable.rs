@@ -4,10 +4,9 @@
 // This will be used to ensure that the memtable is not dropped or underlying arena doesn't reset leaving us pointing to invalid memory locations
 // We also need to track state flags such as whether the memtable is active, immutable, flushing or cleared.
 
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU16;
+use std::sync::atomic::{AtomicU8, AtomicU16};
 
+use crate::storage::arena::arena::Arena;
 use crate::storage::memtable::skip_list::SkipList;
 
 #[repr(u8)]
@@ -17,25 +16,20 @@ enum MemLifeCycle {
     Flushing = 3,
 }
 
-trait MemtableState {}
-
-struct Immutable {}
-impl MemtableState for Immutable {}
-
-struct Mutable {}
-impl MemtableState for Mutable {}
-
-struct Memtable<S: MemtableState> {
-    _state: PhantomData<S>,
-    arena: Arc<()>, // Put the arena here
-    lifecycle: MemLifeCycle,
-    in_flight_readers: AtomicU16,
-    in_flight_writers: AtomicU16,
-    skiplist: SkipList,
+#[repr(u8)]
+enum MemtableState {
+    Immutable = 1,
+    Mutable = 2,
 }
 
-// With this type state we can make compile time gurantees that the memtable is not written to while it is an immutable memtable. We can also transition state
-// And allow writers to drain.
+pub(crate) struct Memtable {
+    state: AtomicU8,
+    lifecycle: AtomicU8,
+    in_flight_readers: AtomicU16,
+    in_flight_writers: AtomicU16,
+    arena: Arena,
+    skiplist: SkipList,
+}
 
 #[cfg(test)]
 mod tests {

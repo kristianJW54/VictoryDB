@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod allocator;
-mod arena;
+pub(crate) mod arena;
 
 //
 //

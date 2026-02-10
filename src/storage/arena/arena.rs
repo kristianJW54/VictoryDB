@@ -14,7 +14,7 @@
 use std::ptr::NonNull;
 
 #[derive(Debug)]
-pub(super) struct Arena {
+pub(crate) struct Arena {
     ptr: NonNull<usize>, // pointer to the start of the arena in the allocator
     allocation: isize,
     used: isize,
