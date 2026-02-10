@@ -4,12 +4,6 @@ pub(crate) mod allocator;
 pub(crate) mod arena;
 
 //
-//
-//
-//
-//
-//
-//
 
 pub const KB: isize = 1024;
 pub const MB: isize = 1024 * 1024;
