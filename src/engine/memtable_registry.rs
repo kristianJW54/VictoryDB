@@ -2,26 +2,19 @@
 // It creates and manages memtable states and rotations
 //
 
-use crate::storage::memtable::memtable::Memtable;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicPtr, AtomicU8};
+use crate::storage::memtable::memtable::{Immutable, Memtable, Mutable};
+use std::ptr::NonNull;
 
-const MAX_MEMTABLES: u8 = 4;
-const MAX_IMMUTABLE_MEMTABLES: u8 = 3;
-
-// For now we'll have snapshotting here until we can move to the db engine layer correct file
-// Ref counting within ref counting
-struct InMemView {
-    active: *const Memtable,
-    immutable: Vec<*const Memtable>,
+// Memtable List Version is a snapshot of the memtable registry at a given point in time
+// We centralise the memtable registry access for a particular point in time to give to a database snapshot which will allow readers to not block on a mutable mem_list which
+// is changing as memtables are rotated
+pub(crate) struct MemListVersion {
+    active_memtable: NonNull<Memtable<Mutable>>,
+    imm_list: Vec<NonNull<Memtable<Immutable>>>,
 }
 
 // Moving to a more registry based approach
 pub(crate) struct MemTableList {
-    active_memtable: AtomicPtr<Memtable>,
-    immutable_memtables: Vec<Memtable>,
-    //
-    //
-    // TODO: Where do we handle flush memtables?
-    // TODO: Where do we handle free_memtables?
+    active_memtable: Memtable<Mutable>,
+    immutable_memtables: Vec<Memtable<Immutable>>,
 }
