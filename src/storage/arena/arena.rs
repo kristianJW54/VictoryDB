@@ -16,21 +16,18 @@
 // Because we'll be allocating T (such as skiplist Nodes) and bytes (already aligned) we need to makes sure that what we write to in the heap is aligned
 //
 
-use std::ptr::NonNull;
+use std::sync::atomic::{AtomicPtr, AtomicUsize};
+
+#[derive(Debug)]
+pub(crate) struct Chunk {
+    chunk: Box<[u8]>,
+    bump: AtomicUsize,
+}
 
 #[derive(Debug)]
 pub(crate) struct Arena {
-    ptr: NonNull<usize>, // pointer to the start of the arena in the allocator
-    allocation: isize,
-    used: isize,
-}
-
-impl Default for Arena {
-    fn default() -> Self {
-        Self {
-            ptr: NonNull::dangling(),
-            allocation: 0,
-            used: 0,
-        }
-    }
+    current_chunk: AtomicPtr<Chunk>,
+    chunks: Vec<Chunk>,
+    allocation: usize,
+    used: AtomicUsize,
 }

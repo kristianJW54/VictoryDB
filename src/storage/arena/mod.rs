@@ -3,16 +3,10 @@
 pub(crate) mod allocator;
 pub(crate) mod arena;
 
-//
+// Constants
 
-pub const KB: isize = 1024;
-pub const MB: isize = 1024 * 1024;
-
-const DEFAULT_ARENA_SIZE: isize = 64 * MB;
-const SMALL_ARENA_SIZE: isize = 16 * MB;
-
-pub(crate) enum ArenaSize {
-    // Default is 64mb
-    Small = SMALL_ARENA_SIZE,
-    Default = DEFAULT_ARENA_SIZE,
+// Sealed Marker types for Arena policies
+pub(crate) trait ArenaPolicy {
+    const CHUNK_SIZE: usize;
+    const MAX_ARENA_SIZE: usize;
 }
