@@ -97,7 +97,10 @@ impl Arena {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread::{self};
+    use std::{
+        f64::consts::PI,
+        thread::{self},
+    };
 
     struct FakeAlloc {}
 
@@ -140,5 +143,62 @@ mod tests {
             "arena bump {:?}",
             arena.bump.load(std::sync::atomic::Ordering::Relaxed)
         );
+    }
+
+    #[test]
+    fn alignment_bitwise() {
+        // Allocate 8 bytes of memory
+        let mut heap: Box<[u8]> = Box::new([1u8; 8]);
+
+        let mut ptr = heap.as_mut_ptr();
+
+        println!("ptr = {:?}", ptr.addr());
+
+        // The align of type should always be modulo 0 on the pointer usize
+        let extra = ptr.addr() % size_of::<u32>(); // <- This should always be 0 if the alignment of type is correct
+        println!("extra = {:?}", extra);
+
+        // Alignment is always a power of 2 - we can't operate numerically on an address using modulo so we can use bitwise operations
+        let extra_bitwise = ptr.addr() & (size_of::<u32>() - 1);
+        println!("extra_bitwise = {:?}", extra_bitwise);
+
+        // To get to the number of bytes we need to advance to align the pointer we have to do the inverse
+        let new_ptr = (ptr.addr() + size_of::<u32>() - 1) & !(size_of::<u32>() - 1);
+        println!("new_ptr addr = {:?}", new_ptr);
+
+        // Copy in a byte
+        unsafe {
+            *ptr = 2;
+        }
+
+        ptr = unsafe { ptr.add(1) };
+        println!("ptr = {:?}", ptr.addr());
+
+        //
+        // The align of type should always be modulo 0 on the pointer usize
+        let extra = ptr.addr() % size_of::<u32>(); // <- This should always be 0 if the alignment of type is correct
+        println!("extra = {:?}", extra);
+
+        // Alignment is always a power of 2 - we can't operate numerically on an address using modulo so we can use bitwise operations
+        let extra_bitwise = ptr.addr() & (size_of::<u32>() - 1);
+        println!("extra_bitwise = {:?}", extra_bitwise);
+
+        // To get to the number of bytes we need to advance to align the pointer we have to do the inverse
+        let new_ptr = (ptr.addr() + size_of::<u32>() - 1) & !(size_of::<u32>() - 1);
+        println!("new_ptr addr = {:?}", new_ptr);
+
+        let align = ptr.align_offset(size_of::<u32>());
+        // Alignment here will be 3 because the pointer which is at offset 1 is not aligned to 4 bytes
+        println!("alignment = {:?}", align);
+
+        // Check ptr
+        let ptr = unsafe { ptr.add(3) };
+        println!("ptr = {:?}", ptr.addr());
+
+        unsafe {
+            *ptr = 2;
+        }
+
+        println!("heap = {:?}", heap);
     }
 }
