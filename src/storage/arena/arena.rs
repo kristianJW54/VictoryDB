@@ -16,18 +16,63 @@
 // Because we'll be allocating T (such as skiplist Nodes) and bytes (already aligned) we need to makes sure that what we write to in the heap is aligned
 //
 
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicPtr, AtomicUsize},
+};
 
-#[derive(Debug)]
-pub(crate) struct Chunk {
-    chunk: Box<[u8]>,
+use crate::storage::arena::{ArenaPolicy, ArenaSize, allocator::ChunkAllocator};
+
+pub(super) type ChunkPtr = AtomicPtr<u8>;
+
+pub(crate) struct Arena {
+    current_chunk: ChunkPtr,
+    chunks: Mutex<Vec<Box<[u8]>>>,
     bump: AtomicUsize,
+    used: AtomicUsize,
+    allocator: Box<dyn ChunkAllocator>,
+    policy: ArenaPolicy,
 }
 
-#[derive(Debug)]
-pub(crate) struct Arena {
-    current_chunk: AtomicPtr<Chunk>,
-    chunks: Vec<Chunk>,
-    allocation: usize,
-    used: AtomicUsize,
+impl Arena {
+    pub(crate) fn new(policy: ArenaSize, allocator: Box<dyn ChunkAllocator>) -> Self {
+        let policy = policy.to_policy();
+
+        let mut chunk = unsafe { allocator.allocate(policy.block_size) };
+        Self {
+            current_chunk: AtomicPtr::new(chunk.as_mut_ptr()),
+            chunks: Mutex::new(vec![chunk]),
+            bump: AtomicUsize::new(0),
+            used: AtomicUsize::new(0),
+            allocator,
+            policy,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate() {
+        struct FakeAlloc {}
+
+        impl ChunkAllocator for FakeAlloc {
+            unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
+                let _ = size;
+                vec![0; 10].into_boxed_slice()
+            }
+        }
+
+        impl FakeAlloc {
+            fn boxed() -> Box<Self> {
+                Box::new(Self {})
+            }
+        }
+
+        let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
+
+        println!("chunk {:?}", arena.chunks.lock().unwrap()[0]);
+    }
 }
