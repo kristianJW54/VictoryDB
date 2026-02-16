@@ -7,18 +7,21 @@ pub(crate) mod arena;
 const KB: usize = 1000;
 const MB: usize = KB;
 
+const TEST_ARENA_CAP: usize = 20;
 const DEFAULT_ARENA_CAP: usize = 64 * MB;
 const SMALL_ARENA_CAP: usize = 16 * MB;
 const MEDIUM_ARENA_CAP: usize = 32 * MB;
 const MAX_ARENA_BLOCK_SIZE: usize = 128 * MB;
 
 // Block sizes
+const TEST_ARENA_BLOCK_SIZE: usize = 10;
 const DEFAULT_ARENA_BLOCK_SIZE: usize = 2 * MB;
 const LARGE_ARENA_BLOCK_SIZE: usize = 4 * MB;
 const MEDIUM_ARENA_BLOCK_SIZE: usize = 8 * MB;
 const SMALL_ARENA_BLOCK_SIZE: usize = 1 * MB;
 
 pub enum ArenaSize {
+    Test,
     Default,
     Small,
     Medium,
@@ -28,6 +31,10 @@ pub enum ArenaSize {
 impl ArenaSize {
     pub fn to_policy(self) -> ArenaPolicy {
         match self {
+            ArenaSize::Test => ArenaPolicy {
+                block_size: TEST_ARENA_BLOCK_SIZE,
+                cap: TEST_ARENA_CAP,
+            },
             ArenaSize::Default => ArenaPolicy {
                 block_size: DEFAULT_ARENA_BLOCK_SIZE,
                 cap: DEFAULT_ARENA_CAP,

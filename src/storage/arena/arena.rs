@@ -20,7 +20,7 @@ use std::alloc::Layout;
 use std::ptr::NonNull;
 use std::sync::{
     Mutex,
-    atomic::{AtomicPtr, AtomicUsize},
+    atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
 use crate::storage::arena::{ArenaPolicy, ArenaSize, allocator::ChunkAllocator};
@@ -29,16 +29,19 @@ use crate::storage::arena::{ArenaPolicy, ArenaSize, allocator::ChunkAllocator};
 pub(crate) enum ArenaError {
     AllocationError(usize),
     Overflow,
+    ChunkDoubleCheckFailed,
+    ArenaFull,
 }
 
 pub(super) type ChunkPtr = AtomicPtr<u8>;
 
 pub(crate) struct Arena {
     current_chunk: ChunkPtr,
-    end: usize,
+    end: ChunkPtr,
     chunks: Mutex<Vec<Box<[u8]>>>,
     bump: AtomicUsize,
-    used: AtomicUsize,
+    allocated_bytes: AtomicUsize,
+    memory_used: AtomicUsize,
     allocator: Box<dyn ChunkAllocator>,
     policy: ArenaPolicy,
 }
@@ -47,26 +50,42 @@ impl Arena {
     pub(crate) fn new(policy: ArenaSize, allocator: Box<dyn ChunkAllocator>) -> Self {
         let policy = policy.to_policy();
 
-        let mut chunk = unsafe { allocator.allocate(policy.block_size) };
-        let chunk_ptr = chunk.as_mut_ptr();
-        let end = chunk.as_ptr().addr() + chunk.len();
+        let mut heap = unsafe { allocator.allocate(policy.block_size) };
+        let chunk_ptr = heap.as_mut_ptr();
+
+        let end = unsafe { chunk_ptr.add(policy.block_size) };
+
+        let block_cap = policy.cap / policy.block_size;
+        let mut chunks = Vec::with_capacity(block_cap);
+        chunks.push(heap);
         Self {
             current_chunk: AtomicPtr::new(chunk_ptr),
-            end,
-            chunks: Mutex::new(vec![chunk]),
+            end: AtomicPtr::new(end),
+            chunks: Mutex::new(chunks),
             bump: AtomicUsize::new(chunk_ptr.addr()),
-            used: AtomicUsize::new(0),
+            allocated_bytes: AtomicUsize::new(policy.block_size),
+            memory_used: AtomicUsize::new(0),
             allocator,
             policy,
         }
     }
 
-    // We will need to be concurrent for writers here
-    // https://stackoverflow.com/questions/45681531/what-is-the-right-way-to-write-double-checked-locking-in-rust
-    // Shows a double-checked locking pattern for concurrent writers based on:
-    // https://preshing.com/20130930/double-checked-locking-is-fixed-in-cpp11/
-    //
-    // Also we need a CAS loop in order to bump the offset
+    fn alignment_check(&self, bump: usize, layout: Layout) -> Result<(usize, usize), ArenaError> {
+        // Get the next required offset based on the layout alignment
+        debug_assert!(layout.align().is_power_of_two());
+        let aligned = (bump + (layout.align() - 1)) & !(layout.align() - 1);
+
+        let next = aligned
+            .checked_add(layout.size())
+            .ok_or(ArenaError::Overflow)?;
+
+        if next > self.end.load(Ordering::Relaxed).addr() {
+            return Err(ArenaError::Overflow);
+        }
+
+        Ok((aligned, next))
+    }
+
     // https://algomaster.io/learn/concurrency-interview/compare-and-swap
     // Shows a simple CAS loop where we get value Relaxed - compute the new value we want and try to CAS - if we fail we try again.
     //
@@ -81,44 +100,89 @@ impl Arena {
 
         loop {
             // We get relaxed bump here because we will double check if CAS if it fails we try to get bump again in the loop
-            let bump = self.bump.load(std::sync::atomic::Ordering::Relaxed);
+            let bump = self.bump.load(Ordering::Relaxed);
 
-            // Get the next required offset based on the layout alignment
-            debug_assert!(layout.align().is_power_of_two());
-            let aligned = (bump + (layout.align() - 1)) & !(layout.align() - 1);
+            let (aligned, next) = self.alignment_check(bump, layout)?;
 
-            println!("next_ptr: {:?}", aligned);
-            println!("padding needed {}", aligned - bump);
-
-            let next = aligned
-                .checked_add(layout.size())
-                // TODO: This should trigger a new chunk allocation
-                .ok_or(ArenaError::Overflow)?;
-
-            if next > self.end {
-                // TODO: This should trigger a new chunk allocation
-                return Err(ArenaError::Overflow);
-            }
+            // If we fail alignment check we would try_new_chunk
 
             // If CAS works we can write to the arena heap
             if self
                 .bump
-                .compare_exchange_weak(
-                    bump,
-                    next,
-                    std::sync::atomic::Ordering::AcqRel,
-                    std::sync::atomic::Ordering::Relaxed,
-                )
+                .compare_exchange_weak(bump, next, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
                 // If we are ok then we can write to the arena heap by passing the aligned pointer into closure
+                //
+                // SAFTEY: This is unsafe because it is up to the caller to make sure the data has the same layout passed to alloc_raw as the aligned space
+                // was reserved for it
                 f(unsafe { NonNull::new_unchecked(aligned as *mut u8) })?;
+
+                // Update meta data
+
                 return Ok(());
             }
 
             // Another thread beat us - we try again
             std::hint::spin_loop();
         }
+    }
+
+    fn try_new_chunk(&self, layout: Layout) -> Result<(), ArenaError> {
+        // We need to lock and then check we are still ok to mutate the vec and pointer
+        let mut lock = self.chunks.lock().unwrap();
+
+        let bump = self.bump.load(Ordering::Relaxed);
+
+        // Now we double check we are still good to mutate by checking size and alignment
+        if let Ok(_) = self.alignment_check(bump, layout) {
+            return Ok(());
+        }
+
+        // We failed the size and alignment check meaning we need to allocate a new chunk
+
+        // We are ok to mutate the vec
+
+        if self.allocated_bytes.load(Ordering::Relaxed) + self.policy.block_size > self.policy.cap {
+            return Err(ArenaError::ArenaFull);
+        }
+
+        self.allocated_bytes
+            .fetch_add(self.policy.block_size, Ordering::Relaxed);
+
+        // First we need to allocate a new chunk of memory from the allocator
+        let mut chunk = unsafe { self.allocator.allocate(self.policy.block_size) };
+        let chunk_ptr = chunk.as_mut_ptr();
+
+        lock.push(chunk);
+
+        // Update the bump pointer
+        self.bump.store(chunk_ptr.addr(), Ordering::Relaxed);
+        // And update end pointer
+        self.end.store(
+            unsafe { chunk_ptr.add(self.policy.block_size) },
+            Ordering::Relaxed,
+        );
+        // Now we need to atomically update the current chunk pointer
+        self.current_chunk.store(chunk_ptr, Ordering::Relaxed);
+
+        todo!()
+    }
+
+    #[inline(always)]
+    fn blocks_used(&self) -> usize {
+        let used = self.allocated_bytes.load(Ordering::Relaxed);
+        used / self.policy.block_size
+    }
+
+    #[inline(always)]
+    fn max_bytes(&self) -> usize {
+        self.policy.cap
+    }
+
+    #[inline(always)]
+    fn number_of_blocks(&self) -> usize {
+        self.policy.cap / self.policy.block_size
     }
 }
 
@@ -143,13 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn allocate() {
-        let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
-
-        println!("chunk {:?}", arena.chunks.lock().unwrap()[0]);
-    }
-
-    #[test]
     fn competing_allocs() {
         let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
 
@@ -166,18 +223,24 @@ mod tests {
             }
         });
 
-        println!(
-            "arena bump {:?}",
-            arena.bump.load(std::sync::atomic::Ordering::Relaxed)
-        );
+        println!("arena bump {:?}", arena.bump.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn arena_sizing() {
+        let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
+
+        println!("arena max size {:?}", arena.max_bytes());
+        println!("arena max blocks {:?}", arena.number_of_blocks());
     }
 
     #[test]
     fn alignment_bitwise() {
-        let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
+        let arena = Arena::new(ArenaSize::Test, FakeAlloc::boxed());
 
         // First lets alloc a char (1-byte)
         let layout = Layout::new::<u8>();
+        println!("arena bump {:?}", arena.bump.load(Ordering::Relaxed));
         unsafe {
             arena
                 .alloc_raw(layout, |ptr| {
@@ -186,29 +249,18 @@ mod tests {
                 })
                 .unwrap();
         }
-        println!(
-            "arena offset = {:?}",
-            arena.bump.load(std::sync::atomic::Ordering::Relaxed)
-        );
-
-        // This should be [2,1,1,1,1,1,1,1,1,1]
-        println!("arena {:?}", arena.chunks.lock().unwrap()[0]);
 
         let layout = Layout::new::<u32>();
 
         unsafe {
             arena.alloc_raw(layout, |_| Ok(())).unwrap();
         }
-        println!(
-            "arena offset = {:?}",
-            arena.bump.load(std::sync::atomic::Ordering::Relaxed)
-        );
 
         // Should get overflow error
-        let layout = Layout::new::<u64>();
+        let l3 = Layout::new::<u64>();
         unsafe {
             arena
-                .alloc_raw(layout, |_| Ok(()))
+                .alloc_raw(l3, |_| Ok(()))
                 .unwrap_or_else(|e| println!("error {:?}", e));
         }
     }
