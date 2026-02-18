@@ -7,7 +7,6 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
-use crate::storage::arena::allocator::ChunkAllocator;
 use crate::storage::arena::arena::Arena;
 use crate::storage::memtable::skip_list::SkipList;
 
@@ -18,7 +17,7 @@ enum MemLifeCycle {
     Flushing = 3,
 }
 
-trait MemtableState {}
+pub(crate) trait MemtableState {}
 
 pub(crate) struct Mutable {
     in_flight_writers: AtomicU16,

@@ -35,6 +35,13 @@ pub(crate) enum ArenaError {
 
 pub(super) type ChunkPtr = AtomicPtr<u8>;
 
+/// Arena is responsible for holding blocks of memory and managing memory allocation into those blocks. It will handle alignment and block allocation.
+/// Only Memtables will hold an arena.
+///
+/// Arena makes no attempt ensure pointers are not leaked or that memory being written is correclty aligned.
+/// It is the responsibility of the caller to maintain that the data written is the same as the layout provided which arena used to reserve memory for.
+///
+/// For this reason, no specific Drop implementation is needed. Instead, we rely on memtables to implement Drop to know when an arena can be deallocated.
 pub(crate) struct Arena {
     current_chunk: ChunkPtr,
     end: ChunkPtr,
@@ -102,29 +109,38 @@ impl Arena {
             // We get relaxed bump here because we will double check if CAS if it fails we try to get bump again in the loop
             let bump = self.bump.load(Ordering::Relaxed);
 
-            let (aligned, next) = self.alignment_check(bump, layout)?;
+            match self.alignment_check(bump, layout) {
+                Err(_) => {
+                    // If we fail alignment check we try_new_chunk
+                    match self.try_new_chunk(layout) {
+                        // Return out
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    };
+                }
+                Ok((aligned, next)) => {
+                    // If CAS works we can write to the arena heap
+                    if self
+                        .bump
+                        .compare_exchange_weak(bump, next, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        // If we are ok then we can write to the arena heap by passing the aligned pointer into closure
+                        //
+                        // SAFTEY: This is unsafe because it is up to the caller to make sure the data has the same layout passed to alloc_raw as the aligned space
+                        // was reserved for it
+                        f(unsafe { NonNull::new_unchecked(aligned as *mut u8) })?;
 
-            // If we fail alignment check we would try_new_chunk
+                        // Update meta data
+                        self.memory_used.fetch_add(layout.size(), Ordering::AcqRel);
 
-            // If CAS works we can write to the arena heap
-            if self
-                .bump
-                .compare_exchange_weak(bump, next, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
-                // If we are ok then we can write to the arena heap by passing the aligned pointer into closure
-                //
-                // SAFTEY: This is unsafe because it is up to the caller to make sure the data has the same layout passed to alloc_raw as the aligned space
-                // was reserved for it
-                f(unsafe { NonNull::new_unchecked(aligned as *mut u8) })?;
+                        return Ok(());
+                    }
 
-                // Update meta data
-
-                return Ok(());
+                    // Another thread beat us - we try again
+                    std::hint::spin_loop();
+                }
             }
-
-            // Another thread beat us - we try again
-            std::hint::spin_loop();
         }
     }
 
@@ -141,8 +157,7 @@ impl Arena {
 
         // We failed the size and alignment check meaning we need to allocate a new chunk
 
-        // We are ok to mutate the vec
-
+        // We need to check that by adding a new chunk we don't exceed the cap
         if self.allocated_bytes.load(Ordering::Relaxed) + self.policy.block_size > self.policy.cap {
             return Err(ArenaError::ArenaFull);
         }
@@ -150,7 +165,7 @@ impl Arena {
         self.allocated_bytes
             .fetch_add(self.policy.block_size, Ordering::Relaxed);
 
-        // First we need to allocate a new chunk of memory from the allocator
+        // Now we allocate a new chunk of memory from the allocator
         let mut chunk = unsafe { self.allocator.allocate(self.policy.block_size) };
         let chunk_ptr = chunk.as_mut_ptr();
 
@@ -166,7 +181,7 @@ impl Arena {
         // Now we need to atomically update the current chunk pointer
         self.current_chunk.store(chunk_ptr, Ordering::Relaxed);
 
-        todo!()
+        Ok(())
     }
 
     #[inline(always)]
@@ -183,6 +198,12 @@ impl Arena {
     #[inline(always)]
     fn number_of_blocks(&self) -> usize {
         self.policy.cap / self.policy.block_size
+    }
+
+    #[inline(always)]
+    fn memory_used(&self) -> usize {
+        let used = self.memory_used.load(Ordering::Relaxed);
+        used
     }
 }
 
@@ -240,7 +261,6 @@ mod tests {
 
         // First lets alloc a char (1-byte)
         let layout = Layout::new::<u8>();
-        println!("arena bump {:?}", arena.bump.load(Ordering::Relaxed));
         unsafe {
             arena
                 .alloc_raw(layout, |ptr| {
@@ -263,5 +283,57 @@ mod tests {
                 .alloc_raw(l3, |_| Ok(()))
                 .unwrap_or_else(|e| println!("error {:?}", e));
         }
+    }
+
+    #[test]
+    fn chunk_change() {
+        let arena = Arena::new(ArenaSize::Test, FakeAlloc::boxed());
+
+        // We nede to alloacate a u32 - then allocate a u16 - allocating another u32 should trigger a chunk allocation
+
+        let layout_u32 = Layout::new::<u32>();
+        unsafe {
+            arena
+                .alloc_raw(layout_u32, |ptr| {
+                    ptr.cast::<u32>().write(42u32);
+                    Ok(())
+                })
+                .unwrap()
+        }
+        let layout_u16 = Layout::new::<u16>();
+        unsafe {
+            arena
+                .alloc_raw(layout_u16, |ptr| {
+                    ptr.cast::<u16>().write(12u16);
+                    Ok(())
+                })
+                .unwrap()
+        }
+        let layout_u32_2 = Layout::new::<u32>();
+        unsafe {
+            arena
+                .alloc_raw(layout_u32_2, |ptr| {
+                    ptr.cast::<u32>().write(67u32);
+                    Ok(())
+                })
+                .unwrap()
+        }
+
+        println!(
+            "arena first vec chunk  {:?}",
+            arena.chunks.lock().unwrap()[0]
+        );
+        println!(
+            "arena second vec chunk {:?}",
+            arena.chunks.lock().unwrap()[1]
+        );
+        let slice = unsafe {
+            std::slice::from_raw_parts(
+                arena.current_chunk.load(Ordering::Relaxed),
+                arena.policy.block_size,
+            )
+        };
+        println!("from current pointer   {:?}", slice);
+        println!("memory used {:?}", arena.memory_used());
     }
 }
