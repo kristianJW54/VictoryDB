@@ -5,6 +5,7 @@
 // We also need to track state flags such as whether the memtable is active, immutable, flushing or cleared.
 
 use std::marker::PhantomData;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::core::memtable::skip_list::SkipList;
@@ -14,14 +15,14 @@ use crate::infra::arena::arena::Arena;
 enum MemLifeCycle {
     Active = 1,
     Freezing = 2,
-    Flushing = 3,
+    Frozen = 3,
+    Flushing = 4,
+    Flushed = 5,
 }
 
 pub(crate) trait MemtableState {}
 
-pub(crate) struct Mutable {
-    in_flight_writers: AtomicU16,
-}
+pub(crate) struct Mutable {}
 impl MemtableState for Mutable {}
 
 pub(crate) struct Immutable {}
@@ -33,8 +34,13 @@ impl MemtableState for Flushed {}
 // Main Memtable
 pub(crate) struct Memtable<S: MemtableState> {
     _state: PhantomData<S>,
+    inner: NonNull<MemtableInner>,
+}
+
+pub(super) struct MemtableInner {
     lifecycle: AtomicU8,
     ref_count: AtomicU16,
+    in_flight_writers: AtomicU16,
     arena: Arena,
     skiplist: SkipList,
 }
