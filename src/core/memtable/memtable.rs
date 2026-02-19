@@ -7,8 +7,8 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
-use crate::storage::arena::arena::Arena;
-use crate::storage::memtable::skip_list::SkipList;
+use crate::core::memtable::skip_list::SkipList;
+use crate::infra::arena::arena::Arena;
 
 #[repr(u8)]
 enum MemLifeCycle {
@@ -30,6 +30,7 @@ impl MemtableState for Immutable {}
 pub(crate) struct Flushed {}
 impl MemtableState for Flushed {}
 
+// Main Memtable
 pub(crate) struct Memtable<S: MemtableState> {
     _state: PhantomData<S>,
     lifecycle: AtomicU8,

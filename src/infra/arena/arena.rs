@@ -23,7 +23,7 @@ use std::sync::{
     atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
-use crate::storage::arena::{ArenaPolicy, ArenaSize, allocator::ChunkAllocator};
+use crate::infra::arena::{ArenaPolicy, ArenaSize, allocator::ChunkAllocator};
 
 #[derive(Debug)]
 pub(crate) enum ArenaError {
