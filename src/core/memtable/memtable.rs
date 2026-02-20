@@ -3,9 +3,24 @@
 // The memtable needs to be able to track the number of active readers and writers threads on live in-flight operations
 // This will be used to ensure that the memtable is not dropped or underlying arena doesn't reset leaving us pointing to invalid memory locations
 // We also need to track state flags such as whether the memtable is active, immutable, flushing or cleared.
+//
+// // All public methods on Memtable return either:
+//
+// 1) A lifetime-bound reference (&'a [u8]) tied to &self
+//    — ensuring the returned data cannot outlive the borrowed handle.
+//
+// 2) An owned copy (e.g. Vec<u8>) if the data must outlive the handle.
+//
+// Internally, the handle dereferences MemtableInner via raw pointers and
+// the skiplist returns a RawSlice { ptr, len } pointing into arena memory.
+// That RawSlice is then unsafely converted into &'a [u8], where 'a is
+// tied to &self.
+//
+// Because Memtable refcounts and pins the itself,
+// the arena memory remains valid for the duration of the borrow.
 
 use std::marker::PhantomData;
-use std::ptr::NonNull;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::core::memtable::skip_list::SkipList;
@@ -22,19 +37,31 @@ enum MemLifeCycle {
 
 pub(crate) trait MemtableState {}
 
+#[derive(Debug)]
 pub(crate) struct Mutable {}
 impl MemtableState for Mutable {}
 
+#[derive(Debug)]
 pub(crate) struct Immutable {}
 impl MemtableState for Immutable {}
 
-pub(crate) struct Flushed {}
-impl MemtableState for Flushed {}
+#[derive(Debug)]
+pub(crate) struct Frozen {}
+impl MemtableState for Frozen {}
 
 // Main Memtable
 pub(crate) struct Memtable<S: MemtableState> {
     _state: PhantomData<S>,
-    inner: NonNull<MemtableInner>,
+    inner: Arc<MemtableInner>,
+}
+
+impl<S: MemtableState> Clone for Memtable<S> {
+    fn clone(&self) -> Self {
+        Self {
+            _state: PhantomData,
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 pub(super) struct MemtableInner {
@@ -48,10 +75,34 @@ pub(super) struct MemtableInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::arena::allocator::SystemAllocator;
 
     #[test]
     fn mem_enum() {
         let mem = MemLifeCycle::Active;
         assert_eq!(mem as u8, 1);
+    }
+
+    #[test]
+    fn lifetime() {
+        let mem: Memtable<Mutable> = Memtable {
+            _state: PhantomData,
+            inner: Arc::new(MemtableInner {
+                lifecycle: AtomicU8::new(MemLifeCycle::Active as u8),
+                ref_count: AtomicU16::new(1),
+                in_flight_writers: AtomicU16::new(0),
+                arena: Arena::new(
+                    crate::infra::arena::ArenaSize::Test,
+                    crate::infra::arena::allocator::Allocator::System(SystemAllocator::new()),
+                ),
+                skiplist: SkipList::default(),
+            }),
+        };
+
+        let mem_cloned = mem.clone();
+
+        println!("mem {:?}", mem._state);
+        drop(mem);
+        println!("mem cloned {:?}", mem_cloned._state);
     }
 }

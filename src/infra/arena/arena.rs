@@ -23,7 +23,8 @@ use std::sync::{
     atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
-use crate::infra::arena::{ArenaPolicy, ArenaSize, allocator::ChunkAllocator};
+use crate::infra::arena::allocator::Allocator;
+use crate::infra::arena::{ArenaPolicy, ArenaSize};
 
 #[derive(Debug)]
 pub(crate) enum ArenaError {
@@ -49,22 +50,22 @@ pub(crate) struct Arena {
     bump: AtomicUsize,
     allocated_bytes: AtomicUsize,
     memory_used: AtomicUsize,
-    allocator: Box<dyn ChunkAllocator>,
+    allocator: Allocator,
     policy: ArenaPolicy,
 }
 
 impl Arena {
-    pub(crate) fn new(policy: ArenaSize, allocator: Box<dyn ChunkAllocator>) -> Self {
+    pub(crate) fn new(policy: ArenaSize, allocator: Allocator) -> Self {
         let policy = policy.to_policy();
 
         let mut heap = unsafe { allocator.allocate(policy.block_size) };
         let chunk_ptr = heap.as_mut_ptr();
-
         let end = unsafe { chunk_ptr.add(policy.block_size) };
 
         let block_cap = policy.cap / policy.block_size;
         let mut chunks = Vec::with_capacity(block_cap);
         chunks.push(heap);
+
         Self {
             current_chunk: AtomicPtr::new(chunk_ptr),
             end: AtomicPtr::new(end),
@@ -209,27 +210,17 @@ impl Arena {
 
 #[cfg(test)]
 mod tests {
+    use crate::infra::arena::allocator::{Allocator, SystemAllocator};
+
     use super::*;
     use std::thread::{self};
 
-    struct FakeAlloc {}
-
-    impl ChunkAllocator for FakeAlloc {
-        unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
-            let _ = size;
-            vec![1; 10].into_boxed_slice()
-        }
-    }
-
-    impl FakeAlloc {
-        fn boxed() -> Box<Self> {
-            Box::new(Self {})
-        }
-    }
-
     #[test]
     fn competing_allocs() {
-        let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
+        let arena = Arena::new(
+            ArenaSize::Default,
+            Allocator::System(SystemAllocator::new()),
+        );
 
         thread::scope(|s| {
             // Don't need arc because scope guarantees arena is dropped when scope ends
@@ -249,7 +240,10 @@ mod tests {
 
     #[test]
     fn arena_sizing() {
-        let arena = Arena::new(ArenaSize::Default, FakeAlloc::boxed());
+        let arena = Arena::new(
+            ArenaSize::Default,
+            Allocator::System(SystemAllocator::new()),
+        );
 
         println!("arena max size {:?}", arena.max_bytes());
         println!("arena max blocks {:?}", arena.number_of_blocks());
@@ -257,7 +251,7 @@ mod tests {
 
     #[test]
     fn alignment_bitwise() {
-        let arena = Arena::new(ArenaSize::Test, FakeAlloc::boxed());
+        let arena = Arena::new(ArenaSize::Test, Allocator::System(SystemAllocator::new()));
 
         // First lets alloc a char (1-byte)
         let layout = Layout::new::<u8>();
@@ -287,7 +281,7 @@ mod tests {
 
     #[test]
     fn chunk_change() {
-        let arena = Arena::new(ArenaSize::Test, FakeAlloc::boxed());
+        let arena = Arena::new(ArenaSize::Test, Allocator::System(SystemAllocator::new()));
 
         // We nede to alloacate a u32 - then allocate a u16 - allocating another u32 should trigger a chunk allocation
 

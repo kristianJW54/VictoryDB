@@ -36,3 +36,11 @@ struct Header {
 pub(crate) struct SkipList {
     // Fields
 }
+
+impl Default for SkipList {
+    fn default() -> Self {
+        SkipList {
+            // Fields
+        }
+    }
+}

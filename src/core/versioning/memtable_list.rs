@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 // We centralise the memtable registry access for a particular point in time to give to a database snapshot which will allow readers to not block on a mutable mem_list which
 // is changing as memtables are rotated
 pub(crate) struct MemListVersion {
-    active_memtable: NonNull<Mutable>,
+    active_memtable: NonNull<Memtable<Mutable>>,
     imm_list: Vec<NonNull<Memtable<Immutable>>>,
 }
 

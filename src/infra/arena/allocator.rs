@@ -17,9 +17,21 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 // Arean Allocator must only allocate one arena at a time and give ownership of that memory to an arena
 
-//
-pub(crate) trait ChunkAllocator: Send + Sync {
-    unsafe fn allocate(&self, size: usize) -> Box<[u8]>;
+pub(crate) enum Allocator {
+    System(SystemAllocator),
+    NUMA,
+    HugePage,
+    MMap,
+    Test,
+}
+
+impl Allocator {
+    pub(crate) unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
+        match self {
+            Allocator::System(allocator) => unsafe { allocator.allocate(size) },
+            _ => unimplemented!(),
+        }
+    }
 }
 
 // Default Allocator for allocating chunks to arena
