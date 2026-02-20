@@ -23,8 +23,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
-use crate::core::memtable::skip_list::SkipList;
-use crate::infra::arena::arena::Arena;
+use crate::storage::memory::arena::Arena;
+use crate::storage::memtable::skip_list::SkipList;
 
 #[repr(u8)]
 enum MemLifeCycle {
@@ -75,7 +75,7 @@ pub(super) struct MemtableInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::arena::allocator::SystemAllocator;
+    use crate::storage::memory::allocator::SystemAllocator;
 
     #[test]
     fn mem_enum() {
@@ -92,8 +92,8 @@ mod tests {
                 ref_count: AtomicU16::new(1),
                 in_flight_writers: AtomicU16::new(0),
                 arena: Arena::new(
-                    crate::infra::arena::ArenaSize::Test,
-                    crate::infra::arena::allocator::Allocator::System(SystemAllocator::new()),
+                    crate::storage::memory::ArenaSize::Test,
+                    crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
                 ),
                 skiplist: SkipList::default(),
             }),

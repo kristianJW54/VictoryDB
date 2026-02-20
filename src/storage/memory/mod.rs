@@ -16,11 +16,11 @@ const MAX_ARENA_BLOCK_SIZE: usize = 128 * MB;
 // Block sizes
 const TEST_ARENA_BLOCK_SIZE: usize = 10;
 const DEFAULT_ARENA_BLOCK_SIZE: usize = 2 * MB;
-const LARGE_ARENA_BLOCK_SIZE: usize = 4 * MB;
-const MEDIUM_ARENA_BLOCK_SIZE: usize = 8 * MB;
+const LARGE_ARENA_BLOCK_SIZE: usize = 8 * MB;
+const MEDIUM_ARENA_BLOCK_SIZE: usize = 4 * MB;
 const SMALL_ARENA_BLOCK_SIZE: usize = 1 * MB;
 
-pub enum ArenaSize {
+pub(crate) enum ArenaSize {
     Test,
     Default,
     Small,

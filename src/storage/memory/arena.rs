@@ -18,13 +18,14 @@
 
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use std::ptr::*;
 use std::sync::{
     Mutex,
     atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
-use crate::infra::arena::allocator::Allocator;
-use crate::infra::arena::{ArenaPolicy, ArenaSize};
+use crate::storage::memory::allocator::Allocator;
+use crate::storage::memory::{ArenaPolicy, ArenaSize};
 
 #[derive(Debug)]
 pub(crate) enum ArenaError {
@@ -70,7 +71,7 @@ impl Arena {
             current_chunk: AtomicPtr::new(chunk_ptr),
             end: AtomicPtr::new(end),
             chunks: Mutex::new(chunks),
-            bump: AtomicUsize::new(chunk_ptr.addr()),
+            bump: AtomicUsize::new(0),
             allocated_bytes: AtomicUsize::new(policy.block_size),
             memory_used: AtomicUsize::new(0),
             allocator,
@@ -87,7 +88,7 @@ impl Arena {
             .checked_add(layout.size())
             .ok_or(ArenaError::Overflow)?;
 
-        if next > self.end.load(Ordering::Relaxed).addr() {
+        if next > self.policy.block_size {
             return Err(ArenaError::Overflow);
         }
 
@@ -128,9 +129,14 @@ impl Arena {
                     {
                         // If we are ok then we can write to the arena heap by passing the aligned pointer into closure
                         //
+
+                        let current_ptr = self.current_chunk.load(Ordering::Acquire);
+
+                        let ptr = unsafe { current_ptr.add(aligned) };
+
                         // SAFTEY: This is unsafe because it is up to the caller to make sure the data has the same layout passed to alloc_raw as the aligned space
                         // was reserved for it
-                        f(unsafe { NonNull::new_unchecked(aligned as *mut u8) })?;
+                        f(unsafe { NonNull::new_unchecked(ptr) })?;
 
                         // Update meta data
                         self.memory_used.fetch_add(layout.size(), Ordering::AcqRel);
@@ -173,7 +179,7 @@ impl Arena {
         lock.push(chunk);
 
         // Update the bump pointer
-        self.bump.store(chunk_ptr.addr(), Ordering::Relaxed);
+        self.bump.store(0, Ordering::Relaxed);
         // And update end pointer
         self.end.store(
             unsafe { chunk_ptr.add(self.policy.block_size) },
@@ -206,11 +212,20 @@ impl Arena {
         let used = self.memory_used.load(Ordering::Relaxed);
         used
     }
+
+    #[inline]
+    fn get_current_init_slice(&self) -> &[u8] {
+        let current = self.current_chunk.load(Ordering::Relaxed);
+
+        let bump = self.bump.load(Ordering::Relaxed);
+
+        unsafe { &*slice_from_raw_parts(current, bump) }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::infra::arena::allocator::{Allocator, SystemAllocator};
+    use crate::storage::memory::allocator::{Allocator, SystemAllocator};
 
     use super::*;
     use std::thread::{self};
@@ -240,10 +255,19 @@ mod tests {
 
     #[test]
     fn arena_sizing() {
-        let arena = Arena::new(
-            ArenaSize::Default,
-            Allocator::System(SystemAllocator::new()),
-        );
+        let arena = Arena::new(ArenaSize::Test, Allocator::System(SystemAllocator::new()));
+
+        println!("arena {:?}", arena.chunks.lock().unwrap()[0]);
+
+        // Want to print up until the bump
+        let current = arena.current_chunk.load(Ordering::Relaxed).addr();
+        let bump = arena.bump.load(Ordering::Relaxed);
+
+        let diff = bump - current;
+
+        println!("chunk {:?}", unsafe {
+            &*slice_from_raw_parts(current as *const u8, diff)
+        });
 
         println!("arena max size {:?}", arena.max_bytes());
         println!("arena max blocks {:?}", arena.number_of_blocks());
@@ -317,10 +341,12 @@ mod tests {
             "arena first vec chunk  {:?}",
             arena.chunks.lock().unwrap()[0]
         );
+
         println!(
             "arena second vec chunk {:?}",
             arena.chunks.lock().unwrap()[1]
         );
+
         let slice = unsafe {
             std::slice::from_raw_parts(
                 arena.current_chunk.load(Ordering::Relaxed),

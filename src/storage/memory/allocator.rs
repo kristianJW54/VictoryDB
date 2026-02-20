@@ -15,6 +15,8 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
+use crate::storage::memory::LARGE_ARENA_BLOCK_SIZE;
+
 // Arean Allocator must only allocate one arena at a time and give ownership of that memory to an arena
 
 pub(crate) enum Allocator {
@@ -42,9 +44,21 @@ impl SystemAllocator {
         Self {}
     }
 
+    // Default Allocator for allocating chunks to arena
     pub(crate) unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
-        let heap = Box::<[u8]>::new_uninit_slice(size);
-        unsafe { heap.assume_init() }
+        #[cfg(debug_assertions)]
+        {
+            // Zeroed memory in debug — safe to inspect fully
+            // Fully initialized memory in debug - using 1 here so we can see what exactly got allocated
+            vec![1u8; size].into_boxed_slice()
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            // Uninitialized memory in release — max performance
+            let heap = Box::<[u8]>::new_uninit_slice(size);
+            heap.assume_init()
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 // It creates and manages memtable states and rotations
 //
 
-use crate::core::memtable::memtable::{Immutable, Memtable, Mutable};
+use crate::storage::memtable::memtable::{Immutable, Memtable, Mutable};
 use std::ptr::NonNull;
 
 // Memtable List Version is a snapshot of the memtable registry at a given point in time

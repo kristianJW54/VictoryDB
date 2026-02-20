@@ -1,3 +1,2 @@
-pub mod core;
-pub mod infra;
+pub mod storage;
 pub mod utils;
