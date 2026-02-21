@@ -208,13 +208,13 @@ impl Arena {
     }
 
     #[inline(always)]
-    fn memory_used(&self) -> usize {
+    pub(crate) fn memory_used(&self) -> usize {
         let used = self.memory_used.load(Ordering::Relaxed);
         used
     }
 
     #[inline]
-    fn get_current_init_slice(&self) -> &[u8] {
+    pub(crate) fn get_current_init_slice(&self) -> &[u8] {
         let current = self.current_chunk.load(Ordering::Relaxed);
 
         let bump = self.bump.load(Ordering::Relaxed);

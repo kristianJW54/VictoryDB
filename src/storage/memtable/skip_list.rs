@@ -19,11 +19,26 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use std::ptr;
+use std::{
+    alloc::Layout,
+    sync::atomic::{AtomicPtr, AtomicUsize},
+};
 
 use crate::storage::memory::arena::Arena;
 
 // ------------------------------------------------------
+
+#[derive(Debug)]
+pub(crate) enum SkipListError {
+    LayoutError(std::alloc::LayoutError),
+}
+
+impl From<std::alloc::LayoutError> for SkipListError {
+    fn from(err: std::alloc::LayoutError) -> Self {
+        SkipListError::LayoutError(err)
+    }
+}
 
 // We introduce a max head height // NOTE: Later we may want this configurable
 const HEAD_HEIGHT: usize = 8;
@@ -53,10 +68,45 @@ pub(crate) struct Node {
     // Number of levels of this node
     height: AtomicUsize, // TODO: Can we make this smaller since we aren't tracking refs?
 
-    tower: [AtomicPtr<Node>; 0],
+    pub(crate) tower: [AtomicPtr<Node>; 0],
 }
 
-impl Node {}
+impl Node {
+    fn build_layout(
+        height: usize,
+        key_len: usize,
+        value_len: usize,
+    ) -> Result<Layout, SkipListError> {
+        // Get basic layout for the node
+        let mut layout = Layout::new::<Self>();
+
+        // Now we now extend for the height of the tower
+        layout = layout
+            .extend(Layout::array::<AtomicPtr<Node>>(height)?)
+            .map_err(SkipListError::LayoutError)?
+            .0
+            .pad_to_align();
+
+        // Now we add the key and value bytes length as part of the layout to be allocated
+        // These are just u8s so should be simple with no padding
+        layout = layout
+            .extend(Layout::array::<u8>(key_len)?)
+            .map_err(SkipListError::LayoutError)?
+            .0;
+        layout = layout
+            .extend(Layout::array::<u8>(value_len)?)
+            .map_err(SkipListError::LayoutError)?
+            .0;
+
+        Ok(layout)
+
+        // Layout::new::<Self>()
+        //     .extend(Layout::array::<AtomicPtr<Self>>(height).unwrap())
+        //     .unwrap()
+        //     .0
+        //     .pad_to_align()
+    }
+}
 
 // TODO: Need to implement a layout method
 // TODO: Need to implement an alloc method
@@ -65,4 +115,84 @@ impl Node {}
 #[repr(C)]
 struct Header {
     pointers: [AtomicPtr<Node>; HEAD_HEIGHT],
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::memory::{
+        ArenaSize,
+        allocator::{Allocator, SystemAllocator},
+    };
+
+    use super::*;
+
+    #[test]
+    fn basic_node_layout() {
+        let node = Node::build_layout(2, 1, 0);
+        let node2 = Node::build_layout(2, 1, 0);
+
+        println!("Node layout: {:?}", node.as_ref().unwrap());
+
+        // At the moment this will give me 33 layout size align 8 if i don't pad_to_align()
+
+        let arena = Arena::new(
+            ArenaSize::Test(80, 160),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        unsafe {
+            arena
+                .alloc_raw(node.unwrap(), |ptr| {
+                    // Cast to node
+
+                    let n = ptr.as_ptr() as *mut Node;
+
+                    ptr::write(
+                        n,
+                        Node {
+                            key_len: 1,
+                            value_len: 1,
+                            height: AtomicUsize::new(1),
+                            tower: [AtomicPtr::new(ptr::null_mut()); 0],
+                        },
+                    );
+
+                    // Write null pointers to the towers
+                    let tower_off = core::mem::offset_of!(Node, tower);
+
+                    let tower = (n as *mut u8).add(tower_off) as *mut AtomicPtr<Node>;
+
+                    for i in 0..2usize {
+                        ptr::write(tower.add(i), AtomicPtr::new(ptr::null_mut()));
+                    }
+
+                    let tower_bytes = 2 * core::mem::size_of::<AtomicPtr<Node>>();
+                    let key_ptr = (n as *mut u8).add(tower_off + tower_bytes);
+
+                    ptr::write(key_ptr, 24);
+
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        println!("arena = {:?}", arena.get_current_init_slice());
+
+        println!("memory = {:?}", arena.memory_used());
+
+        // Now we should see if we correctly align up from the arena or if we need to pad to align
+
+        unsafe {
+            arena
+                .alloc_raw(node2.unwrap(), |ptr| {
+                    // simple u32 write
+                    ptr.write(42);
+                    Ok(())
+                })
+                .unwrap()
+        };
+
+        println!("arena = {:?}", arena.get_current_init_slice());
+        println!("memory = {:?}", arena.memory_used());
+    }
 }
