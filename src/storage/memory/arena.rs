@@ -255,7 +255,10 @@ mod tests {
 
     #[test]
     fn arena_sizing() {
-        let arena = Arena::new(ArenaSize::Test, Allocator::System(SystemAllocator::new()));
+        let arena = Arena::new(
+            ArenaSize::Test(10, 20),
+            Allocator::System(SystemAllocator::new()),
+        );
 
         println!("arena {:?}", arena.chunks.lock().unwrap()[0]);
 
@@ -275,14 +278,17 @@ mod tests {
 
     #[test]
     fn alignment_bitwise() {
-        let arena = Arena::new(ArenaSize::Test, Allocator::System(SystemAllocator::new()));
+        let arena = Arena::new(
+            ArenaSize::Test(10, 20),
+            Allocator::System(SystemAllocator::new()),
+        );
 
         // First lets alloc a char (1-byte)
         let layout = Layout::new::<u8>();
         unsafe {
             arena
                 .alloc_raw(layout, |ptr| {
-                    unsafe { ptr.write(2u8) }
+                    ptr.write(2u8);
                     Ok(())
                 })
                 .unwrap();
@@ -305,7 +311,10 @@ mod tests {
 
     #[test]
     fn chunk_change() {
-        let arena = Arena::new(ArenaSize::Test, Allocator::System(SystemAllocator::new()));
+        let arena = Arena::new(
+            ArenaSize::Test(10, 20),
+            Allocator::System(SystemAllocator::new()),
+        );
 
         // We nede to alloacate a u32 - then allocate a u16 - allocating another u32 should trigger a chunk allocation
 
@@ -354,6 +363,60 @@ mod tests {
             )
         };
         println!("from current pointer   {:?}", slice);
+        println!("memory used {:?}", arena.memory_used());
+    }
+
+    #[test]
+    fn tower_and_bytes() {
+        let arena = Arena::new(
+            ArenaSize::Test(20, 20),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        #[repr(C)]
+        struct Node {
+            refs_and_height: AtomicUsize,
+            key_len: u32, // We lose nothing by making it a u32
+            value_len: u32,
+            tower: [AtomicPtr<Node>; 0],
+        }
+
+        unsafe {
+            arena
+                .alloc_raw(Layout::new::<Node>(), |ptr| {
+                    ptr.cast::<Node>().write(Node {
+                        key_len: 1,
+                        value_len: 2,
+                        refs_and_height: AtomicUsize::new(3),
+                        tower: [],
+                    });
+                    Ok(())
+                })
+                .expect("Error allocating node");
+        }
+
+        println!("size of node {:?}", std::mem::size_of::<Node>());
+
+        // Now we try to add a byte or element in the tower array
+        unsafe {
+            arena
+                .alloc_raw(Layout::new::<u8>(), |ptr| {
+                    ptr.cast::<u8>().write(42);
+                    Ok(())
+                })
+                .expect("Error allocating byte");
+        }
+
+        unsafe {
+            arena
+                .alloc_raw(Layout::new::<u8>(), |ptr| {
+                    ptr.cast::<u8>().write(20);
+                    Ok(())
+                })
+                .expect("Error allocating byte");
+        }
+
+        println!("current chunk {:?}", arena.get_current_init_slice());
         println!("memory used {:?}", arena.memory_used());
     }
 }

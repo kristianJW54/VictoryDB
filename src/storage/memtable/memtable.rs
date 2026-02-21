@@ -92,7 +92,7 @@ mod tests {
                 ref_count: AtomicU16::new(1),
                 in_flight_writers: AtomicU16::new(0),
                 arena: Arena::new(
-                    crate::storage::memory::ArenaSize::Test,
+                    crate::storage::memory::ArenaSize::Test(10, 20),
                     crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
                 ),
                 skiplist: SkipList::default(),
