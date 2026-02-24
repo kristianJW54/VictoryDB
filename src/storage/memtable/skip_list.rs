@@ -19,7 +19,8 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
-use std::ptr;
+use std::ptr::{self, NonNull};
+use std::sync::atomic::AtomicU16;
 use std::{
     alloc::Layout,
     sync::atomic::{AtomicPtr, AtomicUsize},
@@ -43,35 +44,35 @@ impl From<std::alloc::LayoutError> for SkipListError {
 // We introduce a max head height // NOTE: Later we may want this configurable
 const HEAD_HEIGHT: usize = 8;
 
-pub(crate) struct SkipList {
+pub(super) struct SkipList {
     // Reference to the arena will be needed
+    pub(super) arena: *const Arena,
+    pub(super) head: Header,
     // Fields
 }
 
-impl Default for SkipList {
-    fn default() -> Self {
-        SkipList {
-            // Fields
-
-        }
-    }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct Header {
+    pointers: [AtomicPtr<Node>; HEAD_HEIGHT],
 }
 
 #[repr(C)]
 pub(crate) struct Node {
-    key_len: u32, // We lose nothing by making it a u32 because AtomicUsize is 8 bytes and will force padding
-    value_len: u32,
-    //
     // NOTE: Crossbeam uses refs as well here - but I think this is because it needs reclamation through EBR but since
     // We're using Arena, refs on the node are not needed
     //
     // Number of levels of this node
-    height: AtomicUsize, // TODO: Can we make this smaller since we aren't tracking refs?
-
+    height: u16, // TODO: Can we make this smaller since we aren't tracking refs?
+    key_len: u16,
+    value_len: u32,
+    //
     pub(crate) tower: [AtomicPtr<Node>; 0],
 }
 
 impl Node {
+    //
+    //
     fn build_layout(
         height: usize,
         key_len: usize,
@@ -84,8 +85,7 @@ impl Node {
         layout = layout
             .extend(Layout::array::<AtomicPtr<Node>>(height)?)
             .map_err(SkipListError::LayoutError)?
-            .0
-            .pad_to_align();
+            .0;
 
         // Now we add the key and value bytes length as part of the layout to be allocated
         // These are just u8s so should be simple with no padding
@@ -99,23 +99,65 @@ impl Node {
             .0;
 
         Ok(layout)
+    }
 
-        // Layout::new::<Self>()
-        //     .extend(Layout::array::<AtomicPtr<Self>>(height).unwrap())
-        //     .unwrap()
-        //     .0
-        //     .pad_to_align()
+    #[inline(always)]
+    unsafe fn set_key_len(node: *mut Node, key_len: u16) {
+        unsafe {
+            ptr::write(&raw mut (*node).key_len, key_len);
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn set_value_len(node: *mut Node, value_len: u32) {
+        unsafe {
+            ptr::write(&raw mut (*node).value_len, value_len);
+        }
+    }
+
+    #[inline]
+    unsafe fn init_node(ptr_memory: NonNull<u8>, height: u16, key_len: u16, value_len: u32) {
+        let node = ptr_memory.as_ptr() as *mut Node;
+
+        unsafe {
+            ptr::write(
+                node,
+                Node {
+                    height,
+                    key_len,
+                    value_len,
+                    tower: [AtomicPtr::new(ptr::null_mut()); 0],
+                },
+            )
+        }
+    }
+
+    // Pointers to get for the skiplist to handle
+    //
+    #[inline(always)]
+    unsafe fn tower_ptr(node: *mut Node) -> *mut AtomicPtr<Node> {
+        unsafe { (node as *mut u8).add(core::mem::offset_of!(Node, tower)) as *mut AtomicPtr<Node> }
+    }
+
+    #[inline(always)]
+    unsafe fn key_ptr(node: *mut Node) -> *mut u8 {
+        let key_ptr = unsafe {
+            (Self::tower_ptr(node) as *mut u8)
+                .add((*node).height as usize * std::mem::size_of::<AtomicPtr<Node>>())
+        };
+        key_ptr
+    }
+
+    #[inline(always)]
+    unsafe fn value_ptr(node: *mut Node) -> *mut u8 {
+        let value_ptr = unsafe { (Self::key_ptr(node) as *mut u8).add((*node).value_len as usize) };
+        value_ptr
     }
 }
 
 // TODO: Need to implement a layout method
 // TODO: Need to implement an alloc method
 // TODO: Need to understand FAM Tower and Key/Value bytes
-
-#[repr(C)]
-struct Header {
-    pointers: [AtomicPtr<Node>; HEAD_HEIGHT],
-}
 
 #[cfg(test)]
 mod tests {
@@ -152,7 +194,7 @@ mod tests {
                         Node {
                             key_len: 1,
                             value_len: 1,
-                            height: AtomicUsize::new(1),
+                            height: 1,
                             tower: [AtomicPtr::new(ptr::null_mut()); 0],
                         },
                     );

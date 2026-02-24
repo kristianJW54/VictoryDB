@@ -20,7 +20,9 @@
 // the arena memory remains valid for the duration of the borrow.
 
 use std::marker::PhantomData;
+use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::storage::memory::arena::Arena;
@@ -74,6 +76,8 @@ pub(super) struct MemtableInner {
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+
     use super::*;
     use crate::storage::memory::allocator::SystemAllocator;
 
@@ -85,17 +89,23 @@ mod tests {
 
     #[test]
     fn lifetime() {
+        let arena = Arena::new(
+            crate::storage::memory::ArenaSize::Test(10, 20),
+            crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
+        );
         let mem: Memtable<Mutable> = Memtable {
             _state: PhantomData,
             inner: Arc::new(MemtableInner {
                 lifecycle: AtomicU8::new(MemLifeCycle::Active as u8),
                 ref_count: AtomicU16::new(1),
                 in_flight_writers: AtomicU16::new(0),
-                arena: Arena::new(
-                    crate::storage::memory::ArenaSize::Test(10, 20),
-                    crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
-                ),
-                skiplist: SkipList::default(),
+                arena: arena,
+                skiplist: SkipList {
+                    arena: &arena,
+                    head: crate::storage::memtable::skip_list::Header {
+                        pointers: array::from_fn(|_| AtomicPtr::new(ptr::null_mut())), // TODO: Fix
+                    },
+                },
             }),
         };
 
