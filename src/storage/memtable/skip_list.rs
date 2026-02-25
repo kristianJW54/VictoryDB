@@ -19,6 +19,8 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
+use std::array;
+use std::f64::consts::PI;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::AtomicU16;
 use std::{
@@ -33,6 +35,7 @@ use crate::storage::memory::arena::Arena;
 #[derive(Debug)]
 pub(crate) enum SkipListError {
     LayoutError(std::alloc::LayoutError),
+    Arena(crate::storage::memory::arena::ArenaError),
 }
 
 impl From<std::alloc::LayoutError> for SkipListError {
@@ -41,20 +44,32 @@ impl From<std::alloc::LayoutError> for SkipListError {
     }
 }
 
+impl From<crate::storage::memory::arena::ArenaError> for SkipListError {
+    fn from(err: crate::storage::memory::arena::ArenaError) -> Self {
+        SkipListError::Arena(err)
+    }
+}
+
 // We introduce a max head height // NOTE: Later we may want this configurable
 const HEAD_HEIGHT: usize = 8;
 
 pub(super) struct SkipList {
     // Reference to the arena will be needed
-    pub(super) arena: *const Arena,
     pub(super) head: Header,
     // Fields
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub(super) struct Header {
     pointers: [AtomicPtr<Node>; HEAD_HEIGHT],
+}
+
+impl Header {
+    pub(crate) fn new() -> Self {
+        let array: [AtomicPtr<Node>; HEAD_HEIGHT] =
+            array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
+        Self { pointers: array }
+    }
 }
 
 #[repr(C)]
@@ -116,7 +131,7 @@ impl Node {
     }
 
     #[inline]
-    unsafe fn init_node(ptr_memory: NonNull<u8>, height: u16, key_len: u16, value_len: u32) {
+    unsafe fn init_node(ptr_memory: NonNull<u8>, height: u8, key_len: u16, value_len: u32) {
         let node = ptr_memory.as_ptr() as *mut Node;
 
         unsafe {
@@ -140,6 +155,12 @@ impl Node {
     }
 
     #[inline(always)]
+    unsafe fn tower_level(node: *mut Node, index: usize) -> *const AtomicPtr<Node> {
+        debug_assert!(index <= unsafe { (*node).height as usize });
+        unsafe { Self::tower_ptr(node).add(index) }
+    }
+
+    #[inline(always)]
     unsafe fn key_ptr(node: *mut Node) -> *mut u8 {
         let key_ptr = unsafe {
             (Self::tower_ptr(node) as *mut u8)
@@ -153,11 +174,33 @@ impl Node {
         let value_ptr = unsafe { (Self::key_ptr(node) as *mut u8).add((*node).value_len as usize) };
         value_ptr
     }
-}
 
-// TODO: Need to implement a layout method
-// TODO: Need to implement an alloc method
-// TODO: Need to understand FAM Tower and Key/Value bytes
+    // TODO: Think about making unsafe smaller
+    // TODO: How can we return something from the closure?
+    // TODO: Can we be clearer about the init_node?
+    // TODO: Think about where this is called and used internally
+    fn alloc(
+        arena: &Arena,
+        height: u8,
+        key_len: u16,
+        value_len: u32,
+    ) -> Result<*mut Node, SkipListError> {
+        debug_assert!(height as usize <= HEAD_HEIGHT);
+        let h = height as usize;
+        let k = key_len as usize;
+        let v = value_len as usize;
+        let layout = Self::build_layout(h, k, v)?;
+        let mut node_ptr: *mut Node = ptr::null_mut();
+        unsafe {
+            arena.alloc_raw(layout, |ptr| {
+                Self::init_node(ptr, height, key_len, value_len);
+                node_ptr = ptr.as_ptr() as *mut Node;
+                Ok(())
+            })?;
+        };
+        Ok(node_ptr)
+    }
+}
 
 #[cfg(test)]
 mod tests {

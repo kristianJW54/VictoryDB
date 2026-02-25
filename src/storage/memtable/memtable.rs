@@ -79,7 +79,7 @@ mod tests {
     use std::array;
 
     use super::*;
-    use crate::storage::memory::allocator::SystemAllocator;
+    use crate::storage::{memory::allocator::SystemAllocator, memtable::skip_list::Header};
 
     #[test]
     fn mem_enum() {
@@ -101,10 +101,7 @@ mod tests {
                 in_flight_writers: AtomicU16::new(0),
                 arena: arena,
                 skiplist: SkipList {
-                    arena: &arena,
-                    head: crate::storage::memtable::skip_list::Header {
-                        pointers: array::from_fn(|_| AtomicPtr::new(ptr::null_mut())), // TODO: Fix
-                    },
+                    head: Header::new(),
                 },
             }),
         };
