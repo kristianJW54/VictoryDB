@@ -131,7 +131,7 @@ impl Node {
     }
 
     #[inline]
-    unsafe fn init_node(ptr_memory: NonNull<u8>, height: u8, key_len: u16, value_len: u32) {
+    unsafe fn init_node(ptr_memory: NonNull<u8>, height: u16, key_len: u16, value_len: u32) {
         let node = ptr_memory.as_ptr() as *mut Node;
 
         unsafe {
@@ -181,7 +181,7 @@ impl Node {
     // TODO: Think about where this is called and used internally
     fn alloc(
         arena: &Arena,
-        height: u8,
+        height: u16,
         key_len: u16,
         value_len: u32,
     ) -> Result<*mut Node, SkipListError> {
