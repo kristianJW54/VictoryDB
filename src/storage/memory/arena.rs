@@ -100,11 +100,7 @@ impl Arena {
     //
 
     // NOTE: I've made the closure unsafe and it is up to the caller to ensure that the Layout and write to the pointer are correct.
-    pub(crate) unsafe fn alloc_raw(
-        &self,
-        layout: Layout,
-        f: impl FnOnce(NonNull<u8>) -> Result<(), ArenaError>,
-    ) -> Result<(), ArenaError> {
+    pub(crate) unsafe fn alloc_raw(&self, layout: Layout) -> Result<NonNull<u8>, ArenaError> {
         //
 
         loop {
@@ -132,16 +128,12 @@ impl Arena {
 
                         let current_ptr = self.current_chunk.load(Ordering::Acquire);
 
-                        let ptr = unsafe { current_ptr.add(aligned) };
-
-                        // SAFTEY: This is unsafe because it is up to the caller to make sure the data has the same layout passed to alloc_raw as the aligned space
-                        // was reserved for it
-                        f(unsafe { NonNull::new_unchecked(ptr) })?;
+                        let ptr = unsafe { NonNull::new_unchecked(current_ptr.add(aligned)) };
 
                         // Update meta data
                         self.memory_used.fetch_add(layout.size(), Ordering::AcqRel);
 
-                        return Ok(());
+                        return Ok(ptr);
                     }
 
                     // Another thread beat us - we try again
@@ -243,8 +235,8 @@ mod tests {
                 s.spawn(|| {
                     for _ in 0..1000 {
                         unsafe {
-                            arena.alloc_raw(Layout::new::<u32>(), |_| Ok(())).unwrap();
-                        }
+                            let _ = arena.alloc_raw(Layout::new::<u32>());
+                        };
                     }
                 });
             }
@@ -286,26 +278,20 @@ mod tests {
         // First lets alloc a char (1-byte)
         let layout = Layout::new::<u8>();
         unsafe {
-            arena
-                .alloc_raw(layout, |ptr| {
-                    ptr.write(2u8);
-                    Ok(())
-                })
-                .unwrap();
+            let ptr = arena.alloc_raw(layout).unwrap();
+            ptr.write(2u8);
         }
 
         let layout = Layout::new::<u32>();
 
         unsafe {
-            arena.alloc_raw(layout, |_| Ok(())).unwrap();
+            arena.alloc_raw(layout);
         }
 
         // Should get overflow error
         let l3 = Layout::new::<u64>();
         unsafe {
-            arena
-                .alloc_raw(l3, |_| Ok(()))
-                .unwrap_or_else(|e| println!("error {:?}", e));
+            let _ = arena.alloc_raw(l3).expect("errored");
         }
     }
 
@@ -320,30 +306,18 @@ mod tests {
 
         let layout_u32 = Layout::new::<u32>();
         unsafe {
-            arena
-                .alloc_raw(layout_u32, |ptr| {
-                    ptr.cast::<u32>().write(42u32);
-                    Ok(())
-                })
-                .unwrap()
+            let ptr = arena.alloc_raw(layout_u32).unwrap();
+            ptr.write(42);
         }
         let layout_u16 = Layout::new::<u16>();
         unsafe {
-            arena
-                .alloc_raw(layout_u16, |ptr| {
-                    ptr.cast::<u16>().write(12u16);
-                    Ok(())
-                })
-                .unwrap()
+            let ptr = arena.alloc_raw(layout_u16).unwrap();
+            ptr.write(12);
         }
         let layout_u32_2 = Layout::new::<u32>();
         unsafe {
-            arena
-                .alloc_raw(layout_u32_2, |ptr| {
-                    ptr.cast::<u32>().write(67u32);
-                    Ok(())
-                })
-                .unwrap()
+            let ptr = arena.alloc_raw(layout_u32_2).unwrap();
+            ptr.write(67)
         }
 
         println!(
@@ -382,37 +356,27 @@ mod tests {
         }
 
         unsafe {
-            arena
-                .alloc_raw(Layout::new::<Node>(), |ptr| {
-                    ptr.cast::<Node>().write(Node {
-                        key_len: 1,
-                        value_len: 2,
-                        refs_and_height: AtomicUsize::new(3),
-                        tower: [],
-                    });
-                    Ok(())
-                })
-                .expect("Error allocating node");
+            let ptr = arena.alloc_raw(Layout::new::<Node>()).unwrap();
+            ptr.cast::<Node>().write(Node {
+                key_len: 1,
+                value_len: 2,
+                refs_and_height: AtomicUsize::new(3),
+                tower: [],
+            });
         }
 
         println!("size of node {:?}", std::mem::size_of::<Node>());
 
         // Now we try to add a byte or element in the tower array
         unsafe {
-            arena
-                .alloc_raw(Layout::new::<u8>(), |ptr| {
-                    ptr.cast::<u8>().write(42);
-                    Ok(())
-                })
+            let _ = arena
+                .alloc_raw(Layout::new::<u8>())
                 .expect("Error allocating byte");
         }
 
         unsafe {
-            arena
-                .alloc_raw(Layout::new::<u8>(), |ptr| {
-                    ptr.cast::<u8>().write(20);
-                    Ok(())
-                })
+            let _ = arena
+                .alloc_raw(Layout::new::<u8>())
                 .expect("Error allocating byte");
         }
 

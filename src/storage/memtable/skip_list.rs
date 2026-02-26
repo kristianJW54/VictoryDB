@@ -20,13 +20,8 @@
 // └─────────────────────┘
 
 use std::array;
-use std::f64::consts::PI;
 use std::ptr::{self, NonNull};
-use std::sync::atomic::AtomicU16;
-use std::{
-    alloc::Layout,
-    sync::atomic::{AtomicPtr, AtomicUsize},
-};
+use std::{alloc::Layout, sync::atomic::AtomicPtr};
 
 use crate::storage::memory::arena::Arena;
 
@@ -143,7 +138,17 @@ impl Node {
                     value_len,
                     tower: [AtomicPtr::new(ptr::null_mut()); 0],
                 },
-            )
+            );
+
+            for i in 0..height as usize {
+                Self::tower_ptr(node)
+                    .add(i)
+                    .write(AtomicPtr::new(ptr::null_mut()));
+            }
+
+            // TODO: We could also initialize the key and value bytes to zero here OR leave MaybeUninit but we would have to ensure that
+            // we only assumit_init() when we know the key and value are initialized
+            // TODO: If we do leave MaybeUninit, how do we use assume_init() when we want to read the key and value bytes?
         }
     }
 
@@ -179,7 +184,7 @@ impl Node {
     // TODO: How can we return something from the closure?
     // TODO: Can we be clearer about the init_node?
     // TODO: Think about where this is called and used internally
-    fn alloc(
+    unsafe fn alloc(
         arena: &Arena,
         height: u16,
         key_len: u16,
@@ -190,15 +195,11 @@ impl Node {
         let k = key_len as usize;
         let v = value_len as usize;
         let layout = Self::build_layout(h, k, v)?;
-        let mut node_ptr: *mut Node = ptr::null_mut();
         unsafe {
-            arena.alloc_raw(layout, |ptr| {
-                Self::init_node(ptr, height, key_len, value_len);
-                node_ptr = ptr.as_ptr() as *mut Node;
-                Ok(())
-            })?;
+            let ptr = arena.alloc_raw(layout)?;
+            Self::init_node(ptr, height, key_len, value_len);
+            return Ok(ptr.as_ptr() as *mut Node);
         };
-        Ok(node_ptr)
     }
 }
 
@@ -213,71 +214,22 @@ mod tests {
 
     #[test]
     fn basic_node_layout() {
-        let node = Node::build_layout(2, 1, 0);
-        let node2 = Node::build_layout(2, 1, 0);
-
-        println!("Node layout: {:?}", node.as_ref().unwrap());
-
-        // At the moment this will give me 33 layout size align 8 if i don't pad_to_align()
-
+        //
         let arena = Arena::new(
             ArenaSize::Test(80, 160),
             Allocator::System(SystemAllocator::new()),
         );
 
+        // Now we want to alloc a node
+
+        let node = unsafe { Node::alloc(&arena, 1, 1, 0).unwrap() };
         unsafe {
-            arena
-                .alloc_raw(node.unwrap(), |ptr| {
-                    // Cast to node
-
-                    let n = ptr.as_ptr() as *mut Node;
-
-                    ptr::write(
-                        n,
-                        Node {
-                            key_len: 1,
-                            value_len: 1,
-                            height: 1,
-                            tower: [AtomicPtr::new(ptr::null_mut()); 0],
-                        },
-                    );
-
-                    // Write null pointers to the towers
-                    let tower_off = core::mem::offset_of!(Node, tower);
-
-                    let tower = (n as *mut u8).add(tower_off) as *mut AtomicPtr<Node>;
-
-                    for i in 0..2usize {
-                        ptr::write(tower.add(i), AtomicPtr::new(ptr::null_mut()));
-                    }
-
-                    let tower_bytes = 2 * core::mem::size_of::<AtomicPtr<Node>>();
-                    let key_ptr = (n as *mut u8).add(tower_off + tower_bytes);
-
-                    ptr::write(key_ptr, 24);
-
-                    Ok(())
-                })
-                .unwrap();
+            ptr::write(Node::key_ptr(node), 24);
         }
-
-        println!("arena = {:?}", arena.get_current_init_slice());
-
-        println!("memory = {:?}", arena.memory_used());
-
-        // Now we should see if we correctly align up from the arena or if we need to pad to align
-
+        let node2 = unsafe { Node::alloc(&arena, 1, 1, 0).unwrap() };
         unsafe {
-            arena
-                .alloc_raw(node2.unwrap(), |ptr| {
-                    // simple u32 write
-                    ptr.write(42);
-                    Ok(())
-                })
-                .unwrap()
-        };
-
-        println!("arena = {:?}", arena.get_current_init_slice());
-        println!("memory = {:?}", arena.memory_used());
+            ptr::write(Node::key_ptr(node2), 89);
+        }
+        println!("arena new = {:?}", arena.get_current_init_slice());
     }
 }
