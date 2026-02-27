@@ -20,7 +20,9 @@
 // └─────────────────────┘
 
 use std::array;
+use std::ops::Deref;
 use std::ptr::{self, NonNull};
+use std::sync::atomic::AtomicUsize;
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 
 use crate::storage::memory::arena::Arena;
@@ -47,12 +49,6 @@ impl From<crate::storage::memory::arena::ArenaError> for SkipListError {
 
 // We introduce a max head height // NOTE: Later we may want this configurable
 const HEAD_HEIGHT: usize = 8;
-
-pub(super) struct SkipList {
-    // Reference to the arena will be needed
-    pub(super) head: Header,
-    // Fields
-}
 
 #[repr(C)]
 pub(super) struct Header {
@@ -111,20 +107,6 @@ impl Node {
         Ok(layout)
     }
 
-    #[inline(always)]
-    unsafe fn set_key_len(node: *mut Node, key_len: u16) {
-        unsafe {
-            ptr::write(&raw mut (*node).key_len, key_len);
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn set_value_len(node: *mut Node, value_len: u32) {
-        unsafe {
-            ptr::write(&raw mut (*node).value_len, value_len);
-        }
-    }
-
     #[inline]
     unsafe fn init_node(ptr_memory: NonNull<u8>, height: u16, key_len: u16, value_len: u32) {
         let node = ptr_memory.as_ptr() as *mut Node;
@@ -180,8 +162,6 @@ impl Node {
         value_ptr
     }
 
-    // TODO: Think about making unsafe smaller
-    // TODO: How can we return something from the closure?
     // TODO: Can we be clearer about the init_node?
     // TODO: Think about where this is called and used internally
     unsafe fn alloc(
@@ -191,16 +171,56 @@ impl Node {
         value_len: u32,
     ) -> Result<*mut Node, SkipListError> {
         debug_assert!(height as usize <= HEAD_HEIGHT);
-        let h = height as usize;
-        let k = key_len as usize;
-        let v = value_len as usize;
-        let layout = Self::build_layout(h, k, v)?;
+        let layout = Self::build_layout(height as usize, key_len as usize, value_len as usize)?;
         unsafe {
             let ptr = arena.alloc_raw(layout)?;
             Self::init_node(ptr, height, key_len, value_len);
             return Ok(ptr.as_ptr() as *mut Node);
         };
     }
+}
+
+// NOTE:
+// For the SkipList we want to make sure that certain fields which are concurrently accessed often are given their own cache line
+// A great explanation and gathering of sources is in crossbema -> https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-utils/src/cache_padded.rs#L150
+//
+// For now, we will default to aligning to 64 bytes and over time consider using more alignment for different sources
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[repr(align(64))]
+struct CachePadded<T> {
+    value: T,
+}
+
+unsafe impl<T> Send for CachePadded<T> {}
+unsafe impl<T> Sync for CachePadded<T> {}
+
+impl<T> Deref for CachePadded<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+// We need data for the SkipList such as:
+// - Seed for random number generation
+// - Entries in the skip list
+// - Max level
+
+struct Data {
+    seed: AtomicUsize,
+    entries: AtomicUsize,
+    max_level: AtomicUsize,
+}
+
+// VictoryDB SkipList is backed by an aligned arena.
+// TODO: describe and use diagram
+
+// SkipList
+pub(super) struct SkipList {
+    head: Header,
+    data: CachePadded<Data>,
 }
 
 #[cfg(test)]
