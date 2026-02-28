@@ -79,7 +79,7 @@ mod tests {
     use std::array;
 
     use super::*;
-    use crate::storage::memory::allocator::SystemAllocator;
+    use crate::storage::{comparator::DefaultComparator, memory::allocator::SystemAllocator};
 
     #[test]
     fn mem_enum() {
@@ -100,7 +100,7 @@ mod tests {
                 ref_count: AtomicU16::new(1),
                 in_flight_writers: AtomicU16::new(0),
                 arena: arena,
-                skiplist: SkipList::new(),
+                skiplist: SkipList::new(Arc::new(DefaultComparator {})),
             }),
         };
 

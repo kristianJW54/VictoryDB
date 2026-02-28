@@ -22,10 +22,11 @@
 use std::array;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 
-use crate::storage::comparator::DefaultComparator;
+use crate::storage::comparator::{Comparator, DefaultComparator};
 use crate::storage::memory::arena::Arena;
 
 // ------------------------------------------------------
@@ -218,18 +219,17 @@ struct Data {
 // VictoryDB SkipList is backed by an aligned arena.
 // TODO: describe and use diagram
 
-// TODO: Figure out a CompareFn
-
 // SkipList
-pub(super) struct SkipList<C = DefaultComparator> {
+pub(super) struct SkipList {
     head: Header,
     data: CachePadded<Data>,
-    comparator: C, // TODO: Need to add comparison logic
-                   // Metrics?
+    // We use Arc here because the Comparator is global law for ordering and must be shared across memtables and ssTables
+    comparator: Arc<dyn Comparator>,
+    // Metrics?
 }
 
 impl SkipList {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(comparator: Arc<dyn Comparator>) -> Self {
         let data = CachePadded {
             value: Data {
                 seed: AtomicUsize::new(0),
@@ -240,7 +240,7 @@ impl SkipList {
         Self {
             head: Header::new(),
             data,
-            comparator: DefaultComparator {},
+            comparator,
             // Metrics?
         }
     }
