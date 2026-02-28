@@ -51,6 +51,7 @@ pub(crate) struct Arena {
     bump: AtomicUsize,
     allocated_bytes: AtomicUsize,
     memory_used: AtomicUsize,
+    // TODO: May want total padding bytes? for later optimization
     allocator: Allocator,
     policy: ArenaPolicy,
 }

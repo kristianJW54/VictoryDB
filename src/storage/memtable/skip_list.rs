@@ -25,6 +25,7 @@ use std::ptr::{self, NonNull};
 use std::sync::atomic::AtomicUsize;
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 
+use crate::storage::comparator::DefaultComparator;
 use crate::storage::memory::arena::Arena;
 
 // ------------------------------------------------------
@@ -48,16 +49,16 @@ impl From<crate::storage::memory::arena::ArenaError> for SkipListError {
 }
 
 // We introduce a max head height // NOTE: Later we may want this configurable
-const HEAD_HEIGHT: usize = 8;
+const MAX_HEAD_HEIGHT: usize = 8;
 
 #[repr(C)]
 pub(super) struct Header {
-    pointers: [AtomicPtr<Node>; HEAD_HEIGHT],
+    pointers: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
 }
 
 impl Header {
     pub(crate) fn new() -> Self {
-        let array: [AtomicPtr<Node>; HEAD_HEIGHT] =
+        let array: [AtomicPtr<Node>; MAX_HEAD_HEIGHT] =
             array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
         Self { pointers: array }
     }
@@ -170,7 +171,7 @@ impl Node {
         key_len: u16,
         value_len: u32,
     ) -> Result<*mut Node, SkipListError> {
-        debug_assert!(height as usize <= HEAD_HEIGHT);
+        debug_assert!(height as usize <= MAX_HEAD_HEIGHT);
         let layout = Self::build_layout(height as usize, key_len as usize, value_len as usize)?;
         unsafe {
             let ptr = arena.alloc_raw(layout)?;
@@ -217,10 +218,38 @@ struct Data {
 // VictoryDB SkipList is backed by an aligned arena.
 // TODO: describe and use diagram
 
+// TODO: Figure out a CompareFn
+
 // SkipList
-pub(super) struct SkipList {
+pub(super) struct SkipList<C = DefaultComparator> {
     head: Header,
     data: CachePadded<Data>,
+    comparator: C, // TODO: Need to add comparison logic
+                   // Metrics?
+}
+
+impl SkipList {
+    pub(super) fn new() -> Self {
+        let data = CachePadded {
+            value: Data {
+                seed: AtomicUsize::new(0),
+                entries: AtomicUsize::new(0),
+                max_level: AtomicUsize::new(0),
+            },
+        };
+        Self {
+            head: Header::new(),
+            data,
+            comparator: DefaultComparator {},
+            // Metrics?
+        }
+    }
+
+    // TODO: Need to implement operations for SkipList
+    // - Search
+    // - Insert
+    // - Range?
+    // - Random Height Generation
 }
 
 #[cfg(test)]
@@ -246,6 +275,28 @@ mod tests {
         unsafe {
             ptr::write(Node::key_ptr(node), 24);
         }
+
+        // Validate the key_ptr being 24
+        unsafe {
+            // If we did Box::from(T) here, we would break the memory ownership - arena owns this memory, so we don't want to hand it to Box because
+            // it would try to drop the memory and destruct it invalidating our arena
+            // We need to either return a reference slice OR we copy out the bytes into a vec and then into box owned heap
+            let s = std::slice::from_raw_parts(
+                Node::key_ptr(node) as *const u8,
+                (*node).key_len as usize,
+            );
+            assert_eq!(s, &[24u8; 1]);
+            let b = s.to_vec().into_boxed_slice();
+
+            // Now if we drop the box, our arena is still valid
+            drop(b); // If we did Box::from(s) it may not immediately cause a panic BUT the premise is that we do not want to take ownership of arena memory
+            let s2 = std::slice::from_raw_parts(
+                Node::key_ptr(node) as *const u8,
+                (*node).key_len as usize,
+            );
+            assert_eq!(s2, &[24u8; 1]);
+        };
+
         let node2 = unsafe { Node::alloc(&arena, 1, 1, 0).unwrap() };
         unsafe {
             ptr::write(Node::key_ptr(node2), 89);
