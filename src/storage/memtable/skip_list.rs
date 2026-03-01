@@ -216,6 +216,16 @@ struct Data {
     max_level: AtomicUsize,
 }
 
+// TODO: Finish
+struct Traversal {
+    // Searched node is Some when we find the node we're searching for - useful for insertions where we can detect duplicates
+    searched_node: Option<NonNull<Node>>,
+    // Predecessors need to be AtomicPtr<Node> because we need to access the node and modify it's next pointers
+    predecessors: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
+    // Successors only need to be *const Node because we only need to modify our own next pointers
+    successors: [*const Node; MAX_HEAD_HEIGHT],
+}
+
 // VictoryDB SkipList is backed by an aligned arena.
 // TODO: describe and use diagram
 
@@ -226,6 +236,12 @@ pub(super) struct SkipList {
     // We use Arc here because the Comparator is global law for ordering and must be shared across memtables and ssTables
     comparator: Arc<dyn Comparator>,
     // Metrics?
+}
+
+impl Default for SkipList {
+    fn default() -> Self {
+        Self::new(Arc::new(DefaultComparator {}))
+    }
 }
 
 impl SkipList {
@@ -244,6 +260,9 @@ impl SkipList {
             // Metrics?
         }
     }
+
+
+    fn search
 
     // TODO: Need to implement operations for SkipList
     // - Search
