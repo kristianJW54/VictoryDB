@@ -214,6 +214,13 @@ impl Arena {
 
         unsafe { &*slice_from_raw_parts(current, bump) }
     }
+
+    pub(crate) fn print_address(&self) {
+        println!(
+            "arena current address: {:p}",
+            self.current_chunk.load(Ordering::Relaxed)
+        )
+    }
 }
 
 #[cfg(test)]

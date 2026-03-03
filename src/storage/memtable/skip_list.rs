@@ -23,7 +23,7 @@ use std::array;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 
 use crate::storage::comparator::{Comparator, DefaultComparator};
@@ -144,7 +144,7 @@ impl Node {
     }
 
     #[inline(always)]
-    unsafe fn tower_level(node: *mut Node, index: usize) -> *const AtomicPtr<Node> {
+    unsafe fn node_at_tower_level(node: *mut Node, index: usize) -> *const AtomicPtr<Node> {
         debug_assert!(index <= unsafe { (*node).height as usize });
         unsafe { Self::tower_ptr(node).add(index) }
     }
@@ -210,20 +210,47 @@ impl<T> Deref for CachePadded<T> {
 // - Entries in the skip list
 // - Max level
 
-struct Data {
-    seed: AtomicUsize,
-    entries: AtomicUsize,
-    max_level: AtomicUsize,
+pub(super) struct Data {
+    pub(super) seed: AtomicUsize,
+    pub(super) entries: AtomicUsize,
+    pub(super) max_level: AtomicUsize,
 }
 
-// TODO: Finish
-struct Traversal {
+impl Default for Data {
+    fn default() -> Self {
+        Self {
+            seed: AtomicUsize::new(0),
+            entries: AtomicUsize::new(0),
+            max_level: AtomicUsize::new(MAX_HEAD_HEIGHT),
+        }
+    }
+}
+
+pub(super) struct Traversal {
     // Searched node is Some when we find the node we're searching for - useful for insertions where we can detect duplicates
-    searched_node: Option<NonNull<Node>>,
+    pub(super) searched_node: Option<NonNull<Node>>,
     // Predecessors need to be AtomicPtr<Node> because we need to access the node and modify it's next pointers
-    predecessors: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
+    pub(super) predecessors: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
     // Successors only need to be *const Node because we only need to modify our own next pointers
-    successors: [*const Node; MAX_HEAD_HEIGHT],
+    pub(super) successors: [*const Node; MAX_HEAD_HEIGHT],
+}
+
+impl Traversal {
+    pub(crate) fn new() -> Self {
+        let array: [AtomicPtr<Node>; MAX_HEAD_HEIGHT] =
+            std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
+        Self {
+            searched_node: None,
+            predecessors: array,
+            successors: [ptr::null(); MAX_HEAD_HEIGHT],
+        }
+    }
+}
+
+impl Default for Traversal {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // VictoryDB SkipList is backed by an aligned arena.
@@ -231,7 +258,7 @@ struct Traversal {
 
 // SkipList
 pub(super) struct SkipList {
-    head: Header,
+    pub(super) head: Header,
     data: CachePadded<Data>,
     // We use Arc here because the Comparator is global law for ordering and must be shared across memtables and ssTables
     comparator: Arc<dyn Comparator>,
@@ -261,8 +288,41 @@ impl SkipList {
         }
     }
 
+    fn search(&self, key: &[u8]) -> Traversal {
+        //
 
-    fn search
+        // We need an outer loop so that we can reattempt the search if we encounter a concurrent modification
+        unsafe {
+            'outer: loop {
+                let mut t = Traversal::default();
+
+                // Load the level to decrement from in while loop
+                let mut level = self.data.max_level.load(Ordering::Relaxed);
+
+                // We can optimize by skipping levels which have no immediate successors and start straight away at the traversal level
+                while level >= 1
+                    && self
+                        .head
+                        .pointers
+                        .get_unchecked(level - 1)
+                        .load(Ordering::Relaxed)
+                        .is_null()
+                {
+                    level -= 1;
+                }
+
+                // We are at a level which we can move left on
+
+                todo!()
+            }
+        }
+
+        //
+
+        //
+
+        todo!()
+    }
 
     // TODO: Need to implement operations for SkipList
     // - Search
@@ -273,6 +333,7 @@ impl SkipList {
 
 #[cfg(test)]
 mod tests {
+
     use crate::storage::memory::{
         ArenaSize,
         allocator::{Allocator, SystemAllocator},
@@ -321,5 +382,55 @@ mod tests {
             ptr::write(Node::key_ptr(node2), 89);
         }
         println!("arena new = {:?}", arena.get_current_init_slice());
+    }
+
+    #[test]
+    fn level_access() {
+        let arena = Arena::new(
+            ArenaSize::Test(80, 160),
+            Allocator::System(SystemAllocator::new()),
+        );
+        let skip = SkipList::new(Arc::new(DefaultComparator {}));
+
+        // Let's get the base level
+        let base = unsafe { skip.head.pointers.get_unchecked(0) };
+        assert!(
+            base.load(Ordering::Relaxed).is_null(),
+            "base level should be null"
+        );
+
+        // Allocate a node at base level
+        let node = unsafe { Node::alloc(&arena, 1, 5, 2).unwrap() };
+
+        unsafe {
+            ptr::copy(
+                "hello".as_bytes().as_ptr(),
+                Node::key_ptr(node),
+                (*node).key_len as usize,
+            );
+        }
+
+        // Write node into the skip list at the base level
+        let _ = base
+            .compare_exchange(
+                base.load(Ordering::Relaxed),
+                node,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .unwrap();
+
+        // Verify the node was written at base level
+
+        // Check if key is in arena and then check if we can fetch the key from the node
+        let key_ptr = unsafe { Node::key_ptr(node) };
+        let key = unsafe {
+            String::from_utf8_lossy(std::slice::from_raw_parts(
+                key_ptr,
+                (*node).key_len as usize,
+            ))
+        };
+
+        assert_eq!(key, "hello");
     }
 }
