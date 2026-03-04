@@ -19,12 +19,12 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
-use std::array;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
+use std::{array, slice};
 
 use crate::storage::comparator::{Comparator, DefaultComparator};
 use crate::storage::memory::arena::Arena;
@@ -149,6 +149,19 @@ impl Node {
         unsafe { Self::tower_ptr(node).add(index) }
     }
 
+    // SAFETY: We still leave the caller responsible for ensuring that the pointers are compared from a valid arena allocation and not arbitrary pointers.
+    #[inline]
+    unsafe fn tower_height(node: *mut Node) -> usize {
+        // Find the difference between the tower ptr and the key_ptr and then divide by 8
+        //
+        // SAFETY: Because the two pointers are aligned and are from the same arena allocation we can safely subtract them.
+        // Key ptr will always be after the tower ptr in memory, so the difference will be positive and represent the tower height.
+        unsafe {
+            (Node::key_ptr(node).addr() - Node::tower_ptr(node).addr())
+                / std::mem::size_of::<AtomicPtr<Node>>()
+        }
+    }
+
     #[inline(always)]
     unsafe fn key_ptr(node: *mut Node) -> *mut u8 {
         let key_ptr = unsafe {
@@ -179,6 +192,10 @@ impl Node {
             Self::init_node(ptr, height, key_len, value_len);
             return Ok(ptr.as_ptr() as *mut Node);
         };
+    }
+
+    pub(super) fn get_key_bytes<'a>(node: *mut Node) -> &'a [u8] {
+        unsafe { slice::from_raw_parts(Node::key_ptr(node), (*node).key_len as usize) }
     }
 }
 
@@ -226,7 +243,7 @@ impl Default for Data {
     }
 }
 
-pub(super) struct Traversal {
+pub(super) struct TraversalCtx {
     // Searched node is Some when we find the node we're searching for - useful for insertions where we can detect duplicates
     pub(super) searched_node: Option<NonNull<Node>>,
     // Predecessors need to be AtomicPtr<Node> because we need to access the node and modify it's next pointers
@@ -235,7 +252,7 @@ pub(super) struct Traversal {
     pub(super) successors: [*const Node; MAX_HEAD_HEIGHT],
 }
 
-impl Traversal {
+impl TraversalCtx {
     pub(crate) fn new() -> Self {
         let array: [AtomicPtr<Node>; MAX_HEAD_HEIGHT] =
             std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
@@ -247,7 +264,7 @@ impl Traversal {
     }
 }
 
-impl Default for Traversal {
+impl Default for TraversalCtx {
     fn default() -> Self {
         Self::new()
     }
@@ -288,13 +305,13 @@ impl SkipList {
         }
     }
 
-    fn search(&self, key: &[u8]) -> Traversal {
+    fn search(&self, key: &[u8]) -> TraversalCtx {
         //
 
         // We need an outer loop so that we can reattempt the search if we encounter a concurrent modification
         unsafe {
             'outer: loop {
-                let mut t = Traversal::default();
+                let mut t = TraversalCtx::default();
 
                 // Load the level to decrement from in while loop
                 let mut level = self.data.max_level.load(Ordering::Relaxed);
@@ -311,7 +328,21 @@ impl SkipList {
                     level -= 1;
                 }
 
-                // We are at a level which we can move left on
+                // We are at a level which we can move right on
+                while level >= 1 {
+                    level -= 1;
+
+                    let mut pred = self
+                        .head
+                        .pointers
+                        .get_unchecked(level)
+                        .load(Ordering::Relaxed);
+
+                    // We want to continue moving right until we find a key greater than the search key
+                    while !pred.is_null() {
+                        //
+                    }
+                }
 
                 todo!()
             }
@@ -432,5 +463,23 @@ mod tests {
         };
 
         assert_eq!(key, "hello");
+    }
+
+    #[test]
+    fn node_tower_height() {
+        let arena = Arena::new(
+            ArenaSize::Test(80, 160),
+            Allocator::System(SystemAllocator::new()),
+        );
+        let node = unsafe { Node::alloc(&arena, 1, 5, 2).unwrap() };
+
+        unsafe {
+            assert_eq!(Node::tower_height(node), 1);
+        }
+
+        let node2 = unsafe { Node::alloc(&arena, 3, 5, 2).unwrap() };
+        unsafe {
+            assert_eq!(Node::tower_height(node2), 3);
+        }
     }
 }
