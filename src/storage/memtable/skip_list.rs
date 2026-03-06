@@ -247,18 +247,16 @@ pub(super) struct TraversalCtx {
     // Searched node is Some when we find the node we're searching for - useful for insertions where we can detect duplicates
     pub(super) searched_node: Option<NonNull<Node>>,
     // Predecessors need to be AtomicPtr<Node> because we need to access the node and modify it's next pointers
-    pub(super) predecessors: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
+    pub(super) predecessors: [*mut AtomicPtr<Node>; MAX_HEAD_HEIGHT],
     // Successors only need to be *const Node because we only need to modify our own next pointers
     pub(super) successors: [*const Node; MAX_HEAD_HEIGHT],
 }
 
 impl TraversalCtx {
     pub(crate) fn new() -> Self {
-        let array: [AtomicPtr<Node>; MAX_HEAD_HEIGHT] =
-            std::array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
         Self {
             searched_node: None,
-            predecessors: array,
+            predecessors: [ptr::null_mut(); MAX_HEAD_HEIGHT],
             successors: [ptr::null(); MAX_HEAD_HEIGHT],
         }
     }
@@ -328,21 +326,25 @@ impl SkipList {
                     level -= 1;
                 }
 
-                // We are at a level which we can move right on
+                // We are at a level which we can move right
+                // Store the predecessor to keep track and update when we reach the end of the level
+                //
+                // TODO: Need pointer to the tower of the node
+                let mut pred = self.head.pointers;
+
                 while level >= 1 {
                     level -= 1;
 
-                    let mut pred = self
-                        .head
-                        .pointers
-                        .get_unchecked(level)
-                        .load(Ordering::Relaxed);
+                    // We need to get the current level's node
+                    let mut curr = pred.get_unchecked(level).load(Ordering::Relaxed);
 
                     // We want to continue moving right until we find a key greater than the search key
-                    while !pred.is_null() {
+                    while !curr.is_null() {
                         //
                     }
                 }
+
+                t.predecessors[level] = pred;
 
                 todo!()
             }
