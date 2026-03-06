@@ -55,6 +55,7 @@ const MAX_HEAD_HEIGHT: usize = 8;
 #[repr(C)]
 pub(super) struct Header {
     pointers: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
+    // TODO: Change to NonNull<Node> for sentinal node
 }
 
 impl Header {
