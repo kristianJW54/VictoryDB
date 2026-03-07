@@ -54,15 +54,20 @@ const MAX_HEAD_HEIGHT: usize = 8;
 
 #[repr(C)]
 pub(super) struct Header {
-    pointers: [AtomicPtr<Node>; MAX_HEAD_HEIGHT],
-    // TODO: Change to NonNull<Node> for sentinal node
+    sentinel: NonNull<Node>,
 }
 
 impl Header {
-    pub(crate) fn new() -> Self {
-        let array: [AtomicPtr<Node>; MAX_HEAD_HEIGHT] =
-            array::from_fn(|_| AtomicPtr::new(ptr::null_mut()));
-        Self { pointers: array }
+    fn new(memory: *mut u8) -> Self {
+        unsafe {
+            let header = NonNull::new_unchecked(Node::init_node(
+                NonNull::new_unchecked(memory),
+                MAX_HEAD_HEIGHT as u16,
+                0,
+                0,
+            ));
+            Self { sentinel: header }
+        }
     }
 }
 
@@ -111,7 +116,12 @@ impl Node {
     }
 
     #[inline]
-    unsafe fn init_node(ptr_memory: NonNull<u8>, height: u16, key_len: u16, value_len: u32) {
+    unsafe fn init_node(
+        ptr_memory: NonNull<u8>,
+        height: u16,
+        key_len: u16,
+        value_len: u32,
+    ) -> *mut Node {
         let node = ptr_memory.as_ptr() as *mut Node;
 
         unsafe {
@@ -124,12 +134,13 @@ impl Node {
                     tower: [AtomicPtr::new(ptr::null_mut()); 0],
                 },
             );
+            let tower = Self::tower_ptr(node);
 
             for i in 0..height as usize {
-                Self::tower_ptr(node)
-                    .add(i)
-                    .write(AtomicPtr::new(ptr::null_mut()));
+                tower.add(i).write(AtomicPtr::new(ptr::null_mut()));
             }
+
+            node
 
             // TODO: We could also initialize the key and value bytes to zero here OR leave MaybeUninit but we would have to ensure that
             // we only assumit_init() when we know the key and value are initialized
@@ -145,8 +156,8 @@ impl Node {
     }
 
     #[inline(always)]
-    unsafe fn node_at_tower_level(node: *mut Node, index: usize) -> *const AtomicPtr<Node> {
-        debug_assert!(index <= unsafe { (*node).height as usize });
+    unsafe fn node_at_tower_level(node: *mut Node, index: usize) -> *mut AtomicPtr<Node> {
+        debug_assert!(index < unsafe { (*node).height as usize });
         unsafe { Self::tower_ptr(node).add(index) }
     }
 
@@ -178,8 +189,6 @@ impl Node {
         value_ptr
     }
 
-    // TODO: Can we be clearer about the init_node?
-    // TODO: Think about where this is called and used internally
     unsafe fn alloc(
         arena: &Arena,
         height: u16,
@@ -197,6 +206,16 @@ impl Node {
 
     pub(super) fn get_key_bytes<'a>(node: *mut Node) -> &'a [u8] {
         unsafe { slice::from_raw_parts(Node::key_ptr(node), (*node).key_len as usize) }
+    }
+
+    pub(super) fn load_next(node: *mut Node, level: usize) -> *mut Node {
+        debug_assert!(level < MAX_HEAD_HEIGHT);
+        unsafe { (*Self::next(node, level)).load(Ordering::Relaxed) }
+    }
+
+    pub(super) fn next(node: *mut Node, level: usize) -> *mut AtomicPtr<Node> {
+        debug_assert!(level <= MAX_HEAD_HEIGHT);
+        unsafe { Self::node_at_tower_level(node, level) }
     }
 }
 
@@ -248,7 +267,7 @@ pub(super) struct TraversalCtx {
     // Searched node is Some when we find the node we're searching for - useful for insertions where we can detect duplicates
     pub(super) searched_node: Option<NonNull<Node>>,
     // Predecessors need to be AtomicPtr<Node> because we need to access the node and modify it's next pointers
-    pub(super) predecessors: [*mut AtomicPtr<Node>; MAX_HEAD_HEIGHT],
+    pub(super) predecessors: [*mut Node; MAX_HEAD_HEIGHT],
     // Successors only need to be *const Node because we only need to modify our own next pointers
     pub(super) successors: [*const Node; MAX_HEAD_HEIGHT],
 }
@@ -281,14 +300,11 @@ pub(super) struct SkipList {
     // Metrics?
 }
 
-impl Default for SkipList {
-    fn default() -> Self {
-        Self::new(Arc::new(DefaultComparator {}))
-    }
-}
-
 impl SkipList {
-    pub(super) fn new(comparator: Arc<dyn Comparator>) -> Self {
+    pub(super) fn new(
+        comparator: Arc<dyn Comparator>,
+        arena: &Arena,
+    ) -> Result<Self, SkipListError> {
         let data = CachePadded {
             value: Data {
                 seed: AtomicUsize::new(0),
@@ -296,11 +312,28 @@ impl SkipList {
                 max_level: AtomicUsize::new(0),
             },
         };
-        Self {
-            head: Header::new(),
+
+        let head =
+            unsafe { NonNull::new_unchecked(Node::alloc(arena, MAX_HEAD_HEIGHT as u16, 0, 0)?) };
+
+        Ok(Self {
+            head: Header { sentinel: head },
             data,
             comparator,
-            // Metrics?
+        })
+    }
+
+    fn get_tower(&self) -> &[AtomicPtr<Node>] {
+        unsafe {
+            let ptr = (*self.head.sentinel.as_ptr()).tower.as_ptr();
+            slice::from_raw_parts(ptr, MAX_HEAD_HEIGHT)
+        }
+    }
+
+    fn get_tower_mut(&self) -> &mut [AtomicPtr<Node>] {
+        unsafe {
+            let ptr = (*self.head.sentinel.as_ptr()).tower.as_mut_ptr();
+            slice::from_raw_parts_mut(ptr, MAX_HEAD_HEIGHT)
         }
     }
 
@@ -316,13 +349,7 @@ impl SkipList {
                 let mut level = self.data.max_level.load(Ordering::Relaxed);
 
                 // We can optimize by skipping levels which have no immediate successors and start straight away at the traversal level
-                while level >= 1
-                    && self
-                        .head
-                        .pointers
-                        .get_unchecked(level - 1)
-                        .load(Ordering::Relaxed)
-                        .is_null()
+                while level > 0 && Node::load_next(self.head.sentinel.as_ptr(), level - 1).is_null()
                 {
                     level -= 1;
                 }
@@ -330,14 +357,13 @@ impl SkipList {
                 // We are at a level which we can move right
                 // Store the predecessor to keep track and update when we reach the end of the level
                 //
-                // TODO: Need pointer to the tower of the node
-                let mut pred = self.head.pointers;
+                let mut pred = self.head.sentinel.as_ptr();
 
                 while level >= 1 {
                     level -= 1;
 
                     // We need to get the current level's node
-                    let mut curr = pred.get_unchecked(level).load(Ordering::Relaxed);
+                    let mut curr = Node::load_next(pred, level);
 
                     // We want to continue moving right until we find a key greater than the search key
                     while !curr.is_null() {
@@ -419,17 +445,18 @@ mod tests {
     }
 
     #[test]
+    // TODO: Go through this and ensure that we are doing pointer access and memory handling correct
     fn level_access() {
         let arena = Arena::new(
             ArenaSize::Test(80, 160),
             Allocator::System(SystemAllocator::new()),
         );
-        let skip = SkipList::new(Arc::new(DefaultComparator {}));
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
 
         // Let's get the base level
-        let base = unsafe { skip.head.pointers.get_unchecked(0) };
+        let base = Node::next(skip.head.sentinel.as_ptr(), 0);
         assert!(
-            base.load(Ordering::Relaxed).is_null(),
+            unsafe { (*base).load(Ordering::Relaxed).is_null() },
             "base level should be null"
         );
 
@@ -445,14 +472,15 @@ mod tests {
         }
 
         // Write node into the skip list at the base level
-        let _ = base
-            .compare_exchange(
-                base.load(Ordering::Relaxed),
+        let _ = unsafe {
+            (*base).compare_exchange(
+                (*base).load(Ordering::Relaxed),
                 node,
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             )
-            .unwrap();
+        }
+        .unwrap();
 
         // Verify the node was written at base level
 

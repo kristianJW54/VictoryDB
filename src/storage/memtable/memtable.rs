@@ -76,7 +76,6 @@ pub(super) struct MemtableInner {
 
 #[cfg(test)]
 mod tests {
-    use std::array;
 
     use super::*;
     use crate::storage::{comparator::DefaultComparator, memory::allocator::SystemAllocator};
@@ -93,6 +92,7 @@ mod tests {
             crate::storage::memory::ArenaSize::Test(10, 20),
             crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
         );
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
         let mem: Memtable<Mutable> = Memtable {
             _state: PhantomData,
             inner: Arc::new(MemtableInner {
@@ -100,7 +100,7 @@ mod tests {
                 ref_count: AtomicU16::new(1),
                 in_flight_writers: AtomicU16::new(0),
                 arena: arena,
-                skiplist: SkipList::new(Arc::new(DefaultComparator {})),
+                skiplist: skip,
             }),
         };
 
