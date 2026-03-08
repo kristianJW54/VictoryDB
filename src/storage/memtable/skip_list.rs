@@ -209,9 +209,9 @@ impl Node {
         unsafe { slice::from_raw_parts(Node::key_ptr(node), (*node).key_len as usize) }
     }
 
-    pub(super) fn load_next(node: *mut Node, level: usize) -> *mut Node {
+    pub(super) fn load_next(node: *mut Node, level: usize, ordering: Ordering) -> *mut Node {
         debug_assert!(level < MAX_HEAD_HEIGHT);
-        unsafe { (*Self::next(node, level)).load(Ordering::Relaxed) }
+        unsafe { (*Self::next(node, level)).load(ordering) }
     }
 
     pub(super) fn next(node: *mut Node, level: usize) -> *mut AtomicPtr<Node> {
@@ -337,7 +337,7 @@ impl SkipList {
             value: Data {
                 seed: AtomicUsize::new(0),
                 entries: AtomicUsize::new(0),
-                max_level: AtomicUsize::new(0),
+                max_level: AtomicUsize::new(MAX_HEAD_HEIGHT),
             },
         };
 
@@ -360,10 +360,12 @@ impl SkipList {
                 let mut t = TraversalCtx::default();
 
                 // Load the level to decrement from in while loop
-                let mut level = self.data.max_level.load(Ordering::Relaxed);
+                let mut level = self.data.max_level.load(Ordering::Acquire);
 
                 // We can optimize by skipping levels which have no immediate successors and start straight away at the traversal level
-                while level > 0 && Node::load_next(self.head.sentinel.as_ptr(), level - 1).is_null()
+                while level > 0
+                    && Node::load_next(self.head.sentinel.as_ptr(), level - 1, Ordering::Acquire)
+                        .is_null()
                 {
                     level -= 1;
                 }
@@ -376,7 +378,7 @@ impl SkipList {
                     level -= 1;
 
                     // We need to get the current level's node
-                    let mut curr = Node::load_next(pred, level);
+                    let mut curr = Node::load_next(pred, level, Ordering::Acquire);
 
                     // We want to continue moving right until we find a key greater than the search key
                     while !curr.is_null() {
@@ -387,29 +389,28 @@ impl SkipList {
 
                         // TODO: Need to finish logic
                         // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
-                        match self.comparator.compare(key, node_key) {
+                        match self.comparator.compare(node_key, key) {
                             Ord::Less => {
-                                println!("woo");
+                                pred = curr;
+                                curr = Node::load_next(pred, level, Ordering::Relaxed);
+                            }
+                            Ord::Equal => {
+                                println!("found the node");
+                                t.searched_node = Some(unsafe { NonNull::new_unchecked(curr) });
                                 break;
                             }
-                            _ => {
+                            Ord::Greater => {
                                 break;
                             }
                         }
                     }
+
+                    t.predecessors[level] = pred;
+                    t.successors[level] = curr;
                 }
-
-                t.predecessors[level] = pred;
-
-                todo!()
+                return t;
             }
         }
-
-        //
-
-        //
-
-        todo!()
     }
 
     // TODO: Need to implement operations for SkipList
@@ -540,5 +541,129 @@ mod tests {
         unsafe {
             assert_eq!(Node::tower_height(node2), 3);
         }
+    }
+
+    #[test]
+    fn basic_search() {
+        let arena = Arena::new(
+            ArenaSize::Test(320, 640),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+
+        // Keys we want:
+        // Apple
+        // Mango
+        // Pear
+
+        // Insert Apple first with height of 3
+        let apple_node = unsafe { Node::alloc(&arena, 3, b"Apple".len() as u16, 2).unwrap() };
+        unsafe {
+            ptr::copy_nonoverlapping(b"Apple".as_ptr(), Node::key_ptr(apple_node), b"Apple".len());
+        }
+
+        // Insert Mango with height of 2
+        let mango_node = unsafe { Node::alloc(&arena, 2, b"Mango".len() as u16, 2).unwrap() };
+        unsafe {
+            ptr::copy_nonoverlapping(b"Mango".as_ptr(), Node::key_ptr(mango_node), b"Mango".len());
+        }
+
+        // Insert Pear with height of 1
+        let pear_node = unsafe { Node::alloc(&arena, 1, b"Pear".len() as u16, 2).unwrap() };
+        unsafe {
+            ptr::copy_nonoverlapping(b"Pear".as_ptr(), Node::key_ptr(pear_node), b"Pear".len());
+        }
+
+        // Stitch together the nodes
+
+        // Sentinel -> Apple at height 3
+        // First let's get the sentinel node at height 3
+        let s_three = Node::next(skip.head.sentinel.as_ptr(), 2);
+        // Now add in apple pointer to the sentinel's tower
+        unsafe {
+            (*s_three)
+                .compare_exchange(
+                    (*s_three).load(Ordering::Relaxed),
+                    apple_node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .unwrap()
+        };
+        // Sentinel -> Apple at height 2
+        let s_two = Node::next(skip.head.sentinel.as_ptr(), 1);
+        unsafe {
+            (*s_two)
+                .compare_exchange(
+                    (*s_two).load(Ordering::Relaxed),
+                    apple_node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .unwrap()
+        };
+        // Sentinel -> Apple at height 1
+        let s_one = Node::next(skip.head.sentinel.as_ptr(), 0);
+        unsafe {
+            (*s_one)
+                .compare_exchange(
+                    (*s_one).load(Ordering::Relaxed),
+                    apple_node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .unwrap()
+        };
+
+        //
+        // Apple -> Mango at height 2
+        let apple_next = Node::next(apple_node, 1);
+        unsafe {
+            (*apple_next)
+                .compare_exchange(
+                    (*apple_next).load(Ordering::Relaxed),
+                    mango_node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .unwrap()
+        };
+        // Apple -> Mango at height 1
+        let apple_next = Node::next(apple_node, 0);
+        unsafe {
+            (*apple_next)
+                .compare_exchange(
+                    (*apple_next).load(Ordering::Relaxed),
+                    mango_node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .unwrap()
+        };
+        // Mango -> Pear at height 1
+        let mango_next = Node::next(mango_node, 0);
+        unsafe {
+            (*mango_next)
+                .compare_exchange(
+                    (*mango_next).load(Ordering::Relaxed),
+                    pear_node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .unwrap()
+        };
+
+        // Now we validate
+        // First search with Banana
+        //
+
+        let result = skip.search(b"Banana");
+        // Get pred
+        let pred = result.predecessors[0];
+        let key = String::from_utf8_lossy(unsafe {
+            slice::from_raw_parts_mut(Node::key_ptr(pred), (*pred).key_len as usize)
+        });
+        assert_eq!(key.as_bytes(), "Apple".as_bytes());
     }
 }
