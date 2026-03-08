@@ -19,6 +19,7 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
+use std::cmp::Ordering as Ord;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
@@ -214,7 +215,7 @@ impl Node {
     }
 
     pub(super) fn next(node: *mut Node, level: usize) -> *mut AtomicPtr<Node> {
-        debug_assert!(level <= MAX_HEAD_HEIGHT);
+        debug_assert!(level < MAX_HEAD_HEIGHT);
         unsafe { Self::node_at_tower_level(node, level) }
     }
 }
@@ -266,7 +267,8 @@ impl Default for Data {
 pub(super) struct TraversalCtx {
     // Searched node is Some when we find the node we're searching for - useful for insertions where we can detect duplicates
     pub(super) searched_node: Option<NonNull<Node>>,
-    // Predecessors need to be AtomicPtr<Node> because we need to access the node and modify it's next pointers
+    // Predecessors need to be *mut Node because we need to access the node and modify it's next pointers - it's ok to have *mut Node and not AtomicPtr<Node>
+    // because we are not changing the node only it's tower pointers
     pub(super) predecessors: [*mut Node; MAX_HEAD_HEIGHT],
     // Successors only need to be *const Node because we only need to modify our own next pointers
     pub(super) successors: [*const Node; MAX_HEAD_HEIGHT],
@@ -300,6 +302,32 @@ pub(super) struct SkipList {
     // Metrics?
 }
 
+/// SkipList is a concurrent lock-free data structure which supports search, scan and insert operations.
+/// It operates on nodes backed by an aligned arena. There are no deletions meaning that once a node is inserted it remains in the list until the arena is freed.
+/// The structure uses pointer-based locking (AtomicPtr) for concurrent access.
+///
+/// Nodes form vertical "towers". Higher levels skip over more nodes,
+/// allowing logarithmic search time. Traversal starts at the highest
+/// level and drops down when the next pointer would overshoot.
+///
+/// Example layout:
+///
+/// 3 | HEAD -----> A -----------------------> D
+/// 2 | HEAD -----> A -----> B -----> C -----> D
+/// 1 | HEAD -----> A -----> B -----> C -----> D -----> E -> F
+///       |         |        |        |        |       |    |
+///       +---------+--------+--------+--------+-------+----+
+///                 A        B        C        D       E    F
+///
+///
+/// /// Example search for key `C`:
+///
+/// Level 3 : HEAD -----> A
+///                       ↓
+/// Level 2 :             A -----> B -----> C
+///                                         ↓
+/// Level 1 :             A        B -----> C   (found)
+
 impl SkipList {
     pub(super) fn new(
         comparator: Arc<dyn Comparator>,
@@ -323,20 +351,6 @@ impl SkipList {
         })
     }
 
-    fn get_tower(&self) -> &[AtomicPtr<Node>] {
-        unsafe {
-            let ptr = (*self.head.sentinel.as_ptr()).tower.as_ptr();
-            slice::from_raw_parts(ptr, MAX_HEAD_HEIGHT)
-        }
-    }
-
-    fn get_tower_mut(&self) -> &mut [AtomicPtr<Node>] {
-        unsafe {
-            let ptr = (*self.head.sentinel.as_ptr()).tower.as_mut_ptr();
-            slice::from_raw_parts_mut(ptr, MAX_HEAD_HEIGHT)
-        }
-    }
-
     fn search(&self, key: &[u8]) -> TraversalCtx {
         //
 
@@ -356,7 +370,6 @@ impl SkipList {
 
                 // We are at a level which we can move right
                 // Store the predecessor to keep track and update when we reach the end of the level
-                //
                 let mut pred = self.head.sentinel.as_ptr();
 
                 while level >= 1 {
@@ -367,7 +380,22 @@ impl SkipList {
 
                     // We want to continue moving right until we find a key greater than the search key
                     while !curr.is_null() {
-                        //
+                        // Need to get the key slice
+                        let node_key = unsafe {
+                            slice::from_raw_parts(Node::key_ptr(curr), (*curr).key_len as usize)
+                        };
+
+                        // TODO: Need to finish logic
+                        // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
+                        match self.comparator.compare(key, node_key) {
+                            Ord::Less => {
+                                println!("woo");
+                                break;
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
                     }
                 }
 
