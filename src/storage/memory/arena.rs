@@ -101,7 +101,7 @@ impl Arena {
     //
 
     // NOTE: I've made the closure unsafe and it is up to the caller to ensure that the Layout and write to the pointer are correct.
-    pub(crate) unsafe fn alloc_raw(&self, layout: Layout) -> Result<NonNull<u8>, ArenaError> {
+    pub(crate) unsafe fn alloc_raw(&self, layout: Layout) -> NonNull<u8> {
         //
 
         loop {
@@ -113,7 +113,7 @@ impl Arena {
                     // If we fail alignment check we try_new_chunk
                     match self.try_new_chunk(layout) {
                         // Return out
-                        Err(e) => return Err(e),
+                        Err(e) => panic!("Arena allocation failed: {:?}", e), // TODO: Decide if we can try a backup route for this before panicking
                         Ok(_) => continue,
                     };
                 }
@@ -134,7 +134,7 @@ impl Arena {
                         // Update meta data
                         self.memory_used.fetch_add(layout.size(), Ordering::AcqRel);
 
-                        return Ok(ptr);
+                        return ptr;
                     }
 
                     // Another thread beat us - we try again
@@ -286,7 +286,7 @@ mod tests {
         // First lets alloc a char (1-byte)
         let layout = Layout::new::<u8>();
         unsafe {
-            let ptr = arena.alloc_raw(layout).unwrap();
+            let ptr = arena.alloc_raw(layout);
             ptr.write(2u8);
         }
 
@@ -299,7 +299,7 @@ mod tests {
         // Should get overflow error
         let l3 = Layout::new::<u64>();
         unsafe {
-            let _ = arena.alloc_raw(l3).expect("errored");
+            let _ = arena.alloc_raw(l3);
         }
     }
 
@@ -314,17 +314,17 @@ mod tests {
 
         let layout_u32 = Layout::new::<u32>();
         unsafe {
-            let ptr = arena.alloc_raw(layout_u32).unwrap();
+            let ptr = arena.alloc_raw(layout_u32);
             ptr.write(42);
         }
         let layout_u16 = Layout::new::<u16>();
         unsafe {
-            let ptr = arena.alloc_raw(layout_u16).unwrap();
+            let ptr = arena.alloc_raw(layout_u16);
             ptr.write(12);
         }
         let layout_u32_2 = Layout::new::<u32>();
         unsafe {
-            let ptr = arena.alloc_raw(layout_u32_2).unwrap();
+            let ptr = arena.alloc_raw(layout_u32_2);
             ptr.write(67)
         }
 
@@ -364,7 +364,7 @@ mod tests {
         }
 
         unsafe {
-            let ptr = arena.alloc_raw(Layout::new::<Node>()).unwrap();
+            let ptr = arena.alloc_raw(Layout::new::<Node>());
             ptr.cast::<Node>().write(Node {
                 key_len: 1,
                 value_len: 2,
@@ -377,15 +377,11 @@ mod tests {
 
         // Now we try to add a byte or element in the tower array
         unsafe {
-            let _ = arena
-                .alloc_raw(Layout::new::<u8>())
-                .expect("Error allocating byte");
+            let _ = arena.alloc_raw(Layout::new::<u8>());
         }
 
         unsafe {
-            let _ = arena
-                .alloc_raw(Layout::new::<u8>())
-                .expect("Error allocating byte");
+            let _ = arena.alloc_raw(Layout::new::<u8>());
         }
 
         println!("current chunk {:?}", arena.get_current_init_slice());

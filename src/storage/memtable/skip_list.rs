@@ -19,13 +19,14 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
+use std::arch::x86_64::_mm_mask_reduce_and_epi16;
 use std::cmp::Ordering as Ord;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
-use std::{array, slice};
+use std::{array, panic, slice};
 
 use crate::storage::comparator::{Comparator, DefaultComparator};
 use crate::storage::memory::arena::Arena;
@@ -190,19 +191,19 @@ impl Node {
         value_ptr
     }
 
-    unsafe fn alloc(
-        arena: &Arena,
-        height: u16,
-        key_len: u16,
-        value_len: u32,
-    ) -> Result<*mut Node, SkipListError> {
+    unsafe fn alloc(arena: &Arena, height: u16, key_len: u16, value_len: u32) -> *mut Node {
         debug_assert!(height as usize <= MAX_HEAD_HEIGHT);
-        let layout = Self::build_layout(height as usize, key_len as usize, value_len as usize)?;
-        unsafe {
-            let ptr = arena.alloc_raw(layout)?;
-            Self::init_node(ptr, height, key_len, value_len);
-            return Ok(ptr.as_ptr() as *mut Node);
-        };
+        if let Ok(layout) =
+            Self::build_layout(height as usize, key_len as usize, value_len as usize)
+        {
+            unsafe {
+                let ptr = arena.alloc_raw(layout);
+                Self::init_node(ptr, height, key_len, value_len);
+                return ptr.as_ptr() as *mut Node;
+            };
+        } else {
+            panic!("Layout failed")
+        }
     }
 
     pub(super) fn get_key_bytes<'a>(node: *mut Node) -> &'a [u8] {
@@ -342,7 +343,7 @@ impl SkipList {
         };
 
         let head =
-            unsafe { NonNull::new_unchecked(Node::alloc(arena, MAX_HEAD_HEIGHT as u16, 0, 0)?) };
+            unsafe { NonNull::new_unchecked(Node::alloc(arena, MAX_HEAD_HEIGHT as u16, 0, 0)) };
 
         Ok(Self {
             head: Header { sentinel: head },
@@ -355,62 +356,94 @@ impl SkipList {
         //
 
         // We need an outer loop so that we can reattempt the search if we encounter a concurrent modification
-        unsafe {
-            'outer: loop {
-                let mut t = TraversalCtx::default();
+        let mut t = TraversalCtx::default();
 
-                // Load the level to decrement from in while loop
-                let mut level = self.data.max_level.load(Ordering::Acquire);
+        // Load the level to decrement from in while loop
+        let mut level = self.data.max_level.load(Ordering::Acquire);
 
-                // We can optimize by skipping levels which have no immediate successors and start straight away at the traversal level
-                while level > 0
-                    && Node::load_next(self.head.sentinel.as_ptr(), level - 1, Ordering::Acquire)
-                        .is_null()
-                {
-                    level -= 1;
-                }
-
-                // We are at a level which we can move right
-                // Store the predecessor to keep track and update when we reach the end of the level
-                let mut pred = self.head.sentinel.as_ptr();
-
-                while level >= 1 {
-                    level -= 1;
-
-                    // We need to get the current level's node
-                    let mut curr = Node::load_next(pred, level, Ordering::Acquire);
-
-                    // We want to continue moving right until we find a key greater than the search key
-                    while !curr.is_null() {
-                        // Need to get the key slice
-                        let node_key = unsafe {
-                            slice::from_raw_parts(Node::key_ptr(curr), (*curr).key_len as usize)
-                        };
-
-                        // TODO: Need to finish logic
-                        // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
-                        match self.comparator.compare(node_key, key) {
-                            Ord::Less => {
-                                pred = curr;
-                                curr = Node::load_next(pred, level, Ordering::Relaxed);
-                            }
-                            Ord::Equal => {
-                                println!("found the node");
-                                t.searched_node = Some(unsafe { NonNull::new_unchecked(curr) });
-                                break;
-                            }
-                            Ord::Greater => {
-                                break;
-                            }
-                        }
-                    }
-
-                    t.predecessors[level] = pred;
-                    t.successors[level] = curr;
-                }
-                return t;
-            }
+        // We can optimize by skipping levels which have no immediate successors and start straight away at the traversal level
+        while level > 0
+            && Node::load_next(self.head.sentinel.as_ptr(), level - 1, Ordering::Acquire).is_null()
+        {
+            level -= 1;
         }
+
+        // We are at a level which we can move right
+        // Store the predecessor to keep track and update when we reach the end of the level
+        let mut pred = self.head.sentinel.as_ptr();
+
+        while level >= 1 {
+            level -= 1;
+
+            // We need to get the current level's node
+            let mut curr = Node::load_next(pred, level, Ordering::Acquire);
+
+            // We want to continue moving right until we find a key greater than the search key
+            while !curr.is_null() {
+                // Need to get the key slice
+                let node_key =
+                    unsafe { slice::from_raw_parts(Node::key_ptr(curr), (*curr).key_len as usize) };
+
+                // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
+                match self.comparator.compare(node_key, key) {
+                    Ord::Less => {
+                        pred = curr;
+                        curr = Node::load_next(pred, level, Ordering::Relaxed);
+                    }
+                    Ord::Equal => {
+                        t.searched_node = Some(unsafe { NonNull::new_unchecked(curr) });
+                        break;
+                    }
+                    Ord::Greater => {
+                        break;
+                    }
+                }
+            }
+
+            t.predecessors[level] = pred;
+            t.successors[level] = curr;
+        }
+        return t;
+    }
+
+    /// Inserts a key-value pair into the skip list.
+    /// This function is unsafe because it returns a raw pointer to the inserted node and it is the caller's responsibility to ensure that the pointer
+    /// is used correctly and not leaked.
+    pub(super) unsafe fn insert(&self, key: &[u8], value: &[u8], arena: &Arena) -> *mut Node {
+        // First we must search for a position to insert into
+        // If we find the exact key - we can return the node and let caller decide
+        //
+        // Then we must build the node and update meta data for skip list
+        //
+        // Enter a loop for CAS
+        //
+        // Then return
+
+        let traversal_ctx = self.search(key);
+
+        if let Some(node) = traversal_ctx.searched_node {
+            return node.as_ptr();
+        }
+
+        // Build the new node to insert into the searched position
+        self.data.entries.fetch_add(1, Ordering::Relaxed);
+
+        let node_ptr = unsafe { Node::alloc(arena, 1, key.len() as u16, value.len() as u32) };
+
+        unsafe {
+            // Write the key and value into the node
+            ptr::copy_nonoverlapping(key.as_ptr(), Node::key_ptr(node_ptr), key.len());
+            ptr::copy_nonoverlapping(value.as_ptr(), Node::value_ptr(node_ptr), value.len());
+            //
+        }
+
+        // Enter into the CAS loop to insert the node
+        'cas_loop: loop {
+            // TODO: Finish from here
+            break 'cas_loop;
+        }
+
+        todo!()
     }
 
     // TODO: Need to implement operations for SkipList
@@ -440,7 +473,7 @@ mod tests {
 
         // Now we want to alloc a node
 
-        let node = unsafe { Node::alloc(&arena, 1, 1, 0).unwrap() };
+        let node = unsafe { Node::alloc(&arena, 1, 1, 0) };
         unsafe {
             ptr::write(Node::key_ptr(node), 24);
         }
@@ -466,7 +499,7 @@ mod tests {
             assert_eq!(s2, &[24u8; 1]);
         };
 
-        let node2 = unsafe { Node::alloc(&arena, 1, 1, 0).unwrap() };
+        let node2 = unsafe { Node::alloc(&arena, 1, 1, 0) };
         unsafe {
             ptr::write(Node::key_ptr(node2), 89);
         }
@@ -490,7 +523,7 @@ mod tests {
         );
 
         // Allocate a node at base level
-        let node = unsafe { Node::alloc(&arena, 1, 5, 2).unwrap() };
+        let node = unsafe { Node::alloc(&arena, 1, 5, 2) };
 
         unsafe {
             ptr::copy(
@@ -531,13 +564,13 @@ mod tests {
             ArenaSize::Test(80, 160),
             Allocator::System(SystemAllocator::new()),
         );
-        let node = unsafe { Node::alloc(&arena, 1, 5, 2).unwrap() };
+        let node = unsafe { Node::alloc(&arena, 1, 5, 2) };
 
         unsafe {
             assert_eq!(Node::tower_height(node), 1);
         }
 
-        let node2 = unsafe { Node::alloc(&arena, 3, 5, 2).unwrap() };
+        let node2 = unsafe { Node::alloc(&arena, 3, 5, 2) };
         unsafe {
             assert_eq!(Node::tower_height(node2), 3);
         }
@@ -558,19 +591,19 @@ mod tests {
         // Pear
 
         // Insert Apple first with height of 3
-        let apple_node = unsafe { Node::alloc(&arena, 3, b"Apple".len() as u16, 2).unwrap() };
+        let apple_node = unsafe { Node::alloc(&arena, 3, b"Apple".len() as u16, 2) };
         unsafe {
             ptr::copy_nonoverlapping(b"Apple".as_ptr(), Node::key_ptr(apple_node), b"Apple".len());
         }
 
         // Insert Mango with height of 2
-        let mango_node = unsafe { Node::alloc(&arena, 2, b"Mango".len() as u16, 2).unwrap() };
+        let mango_node = unsafe { Node::alloc(&arena, 2, b"Mango".len() as u16, 2) };
         unsafe {
             ptr::copy_nonoverlapping(b"Mango".as_ptr(), Node::key_ptr(mango_node), b"Mango".len());
         }
 
         // Insert Pear with height of 1
-        let pear_node = unsafe { Node::alloc(&arena, 1, b"Pear".len() as u16, 2).unwrap() };
+        let pear_node = unsafe { Node::alloc(&arena, 1, b"Pear".len() as u16, 2) };
         unsafe {
             ptr::copy_nonoverlapping(b"Pear".as_ptr(), Node::key_ptr(pear_node), b"Pear".len());
         }
@@ -665,5 +698,15 @@ mod tests {
             slice::from_raw_parts_mut(Node::key_ptr(pred), (*pred).key_len as usize)
         });
         assert_eq!(key.as_bytes(), "Apple".as_bytes());
+
+        // Now validate with same key 'Apple'
+        // Should get found node Apple
+        //
+        let result_two = skip.search(b"Apple");
+        // Get pred
+        let found = result_two.searched_node;
+        assert!(found.is_some());
+        // Get key
+        assert_eq!(b"Apple", Node::get_key_bytes(found.unwrap().as_ptr()));
     }
 }
