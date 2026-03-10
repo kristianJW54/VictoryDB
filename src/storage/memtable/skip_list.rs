@@ -410,15 +410,6 @@ impl SkipList {
     /// This function is unsafe because it returns a raw pointer to the inserted node and it is the caller's responsibility to ensure that the pointer
     /// is used correctly and not leaked.
     pub(super) unsafe fn insert(&self, key: &[u8], value: &[u8], arena: &Arena) -> *mut Node {
-        // First we must search for a position to insert into
-        // If we find the exact key - we can return the node and let caller decide
-        //
-        // Then we must build the node and update meta data for skip list
-        //
-        // Enter a loop for CAS
-        //
-        // Then return
-
         let traversal_ctx = self.search(key);
 
         if let Some(node) = traversal_ctx.searched_node {
@@ -437,10 +428,52 @@ impl SkipList {
             //
         }
 
-        // Enter into the CAS loop to insert the node
-        'cas_loop: loop {
-            // TODO: Finish from here
-            break 'cas_loop;
+        // Enter into the CAS loop to insert the node at the base level
+        // We need to make sure we insert the node successfully before we build the higher levels above to link the rest of the skip list
+        loop {
+            //
+            // We need to take the new node we created and insert the successor at the base level into the node's tower at the base
+            unsafe {
+                (*Node::next(node_ptr, 0)).store(
+                    Node::load_next(
+                        traversal_ctx.successors[0] as *mut Node,
+                        0,
+                        Ordering::Relaxed,
+                    ),
+                    Ordering::Relaxed,
+                );
+
+                // Now we CAS on the predecessor base pointer to add our new node to it
+
+                let pred = Node::next(traversal_ctx.predecessors[0], 0);
+
+                if (*pred)
+                    .compare_exchange(
+                        traversal_ctx.predecessors[0],
+                        node_ptr,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    break;
+                }
+
+                // We failed to CAS, search again and retry - // TODO: Do we want metrics here do measure contention?
+                let traversal_ctx = self.search(key);
+
+                if let Some(node) = traversal_ctx.searched_node {
+                    return node.as_ptr();
+                }
+            }
+
+            // Now node has been inserted at base level we need to link the levels above
+
+            'level_loop: for level in 1..8 {
+                // TODO: Make random height generation first before finishing
+            }
+
+            break;
         }
 
         todo!()
