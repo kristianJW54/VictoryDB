@@ -336,9 +336,9 @@ impl SkipList {
     ) -> Result<Self, SkipListError> {
         let data = CachePadded {
             value: Data {
-                seed: AtomicUsize::new(0),
+                seed: AtomicUsize::new(Self::seed_generator(1)),
                 entries: AtomicUsize::new(0),
-                max_level: AtomicUsize::new(MAX_HEAD_HEIGHT),
+                max_level: AtomicUsize::new(1),
             },
         };
 
@@ -350,6 +350,59 @@ impl SkipList {
             data,
             comparator,
         })
+    }
+
+    // Generates a random seed for the xorshift random number generator
+    fn seed_generator(seed: usize) -> usize {
+        let mut x: usize = seed;
+
+        x = x.wrapping_add(0x9E3779B97F4A7C15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+        x = x ^ (x >> 31);
+
+        x
+    }
+
+    // Xorshift random number generator - found while reading crossbeams code all credit to those awesome nerds
+    // https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-skiplist/src/base.rs#L708
+    // Original resource:
+    // https://en.wikipedia.org/wiki/Xorshift#Initialization
+    fn generate_random_level(&self) -> usize {
+        //
+        let mut starting_num = self.data.seed.load(Ordering::Relaxed);
+        starting_num ^= starting_num << 12;
+        starting_num ^= starting_num >> 25;
+        starting_num ^= starting_num << 27;
+        self.data.seed.store(starting_num, Ordering::Relaxed);
+
+        let mut height = std::cmp::min(MAX_HEAD_HEIGHT, starting_num.trailing_zeros() as usize + 1);
+
+        // We may have a height which is way bigger than other nodes in the skip list
+        // By looping while height is greater than or equal to 4 we can search to levels below current height and check if the header is null
+        // Meaning no other node has reached this height yet. We can the decrement the height by 1 and loop again.
+        while height >= 4 {
+            let head = Node::next(self.head.sentinel.as_ptr(), height - 2);
+            if head.is_null() {
+                break;
+            }
+            height -= 1;
+        }
+
+        let mut max_height = self.data.max_level.load(Ordering::Relaxed);
+        while height > max_height {
+            match self.data.max_level.compare_exchange_weak(
+                max_height,
+                height,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => max_height = current,
+            }
+        }
+
+        height
     }
 
     fn search(&self, key: &[u8]) -> TraversalCtx {
@@ -469,8 +522,8 @@ impl SkipList {
 
             // Now node has been inserted at base level we need to link the levels above
 
-            'level_loop: for level in 1..8 {
-                // TODO: Make random height generation first before finishing
+            'level_loop: for level in 1..self.generate_random_level() {
+                // TODO: Finish from here
             }
 
             break;
@@ -741,5 +794,31 @@ mod tests {
         assert!(found.is_some());
         // Get key
         assert_eq!(b"Apple", Node::get_key_bytes(found.unwrap().as_ptr()));
+    }
+
+    #[test]
+    fn random_level_generation() {
+        let arena = Arena::new(
+            ArenaSize::Test(320, 640),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+
+        let random = skip.generate_random_level();
+
+        println!("Random level: {}", random);
+        let random = skip.generate_random_level();
+
+        println!("Random level: {}", random);
+        let random = skip.generate_random_level();
+
+        println!("Random level: {}", random);
+        let random = skip.generate_random_level();
+
+        println!("Random level: {}", random);
+        let random = skip.generate_random_level();
+
+        println!("Random level: {}", random);
     }
 }
