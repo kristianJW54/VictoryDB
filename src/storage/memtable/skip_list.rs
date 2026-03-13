@@ -21,10 +21,12 @@
 
 use std::arch::x86_64::_mm_mask_reduce_and_epi16;
 use std::cmp::Ordering as Ord;
+use std::f64::consts::PI;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::u16::MAX;
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 use std::{array, panic, slice};
 
@@ -159,7 +161,9 @@ impl Node {
 
     #[inline(always)]
     unsafe fn node_at_tower_level(node: *mut Node, index: usize) -> *mut AtomicPtr<Node> {
-        debug_assert!(index < unsafe { (*node).height as usize });
+        if !node.is_null() {
+            debug_assert!(index < unsafe { (*node).height as usize });
+        }
         unsafe { Self::tower_ptr(node).add(index) }
     }
 
@@ -411,6 +415,11 @@ impl SkipList {
         // We need an outer loop so that we can reattempt the search if we encounter a concurrent modification
         let mut t = TraversalCtx::default();
 
+        // Set t.predecessors to point to the sentinel at each level
+        for i in 0..MAX_HEAD_HEIGHT {
+            t.predecessors[i] = self.head.sentinel.as_ptr();
+        }
+
         // Load the level to decrement from in while loop
         let mut level = self.data.max_level.load(Ordering::Acquire);
 
@@ -463,7 +472,7 @@ impl SkipList {
     /// This function is unsafe because it returns a raw pointer to the inserted node and it is the caller's responsibility to ensure that the pointer
     /// is used correctly and not leaked.
     pub(super) unsafe fn insert(&self, key: &[u8], value: &[u8], arena: &Arena) -> *mut Node {
-        let traversal_ctx = self.search(key);
+        let mut traversal_ctx = self.search(key);
 
         if let Some(node) = traversal_ctx.searched_node {
             return node.as_ptr();
@@ -472,7 +481,12 @@ impl SkipList {
         // Build the new node to insert into the searched position
         self.data.entries.fetch_add(1, Ordering::Relaxed);
 
-        let node_ptr = unsafe { Node::alloc(arena, 1, key.len() as u16, value.len() as u32) };
+        let height = self.generate_random_level();
+        debug_assert!(height <= MAX_HEAD_HEIGHT);
+        debug_assert!(height <= u16::MAX as usize);
+
+        let node_ptr =
+            unsafe { Node::alloc(arena, height as u16, key.len() as u16, value.len() as u32) };
 
         unsafe {
             // Write the key and value into the node
@@ -486,57 +500,82 @@ impl SkipList {
         loop {
             //
             // We need to take the new node we created and insert the successor at the base level into the node's tower at the base
-            unsafe {
-                (*Node::next(node_ptr, 0)).store(
-                    Node::load_next(
-                        traversal_ctx.successors[0] as *mut Node,
-                        0,
-                        Ordering::Relaxed,
-                    ),
-                    Ordering::Relaxed,
-                );
 
+            let succ = traversal_ctx.successors[0] as *mut Node;
+            if !succ.is_null() {
+                unsafe {
+                    (*Node::next(node_ptr, 0)).store(succ, Ordering::Relaxed);
+                }
+            }
+
+            unsafe {
                 // Now we CAS on the predecessor base pointer to add our new node to it
 
                 let pred = Node::next(traversal_ctx.predecessors[0], 0);
 
                 if (*pred)
-                    .compare_exchange(
-                        traversal_ctx.predecessors[0],
-                        node_ptr,
-                        Ordering::AcqRel,
-                        Ordering::Relaxed,
-                    )
+                    .compare_exchange(succ, node_ptr, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
                     break;
                 }
 
                 // We failed to CAS, search again and retry - // TODO: Do we want metrics here do measure contention?
-                let traversal_ctx = self.search(key);
+                traversal_ctx = self.search(key);
 
                 if let Some(node) = traversal_ctx.searched_node {
                     return node.as_ptr();
                 }
             }
-
-            // Now node has been inserted at base level we need to link the levels above
-
-            'level_loop: for level in 1..self.generate_random_level() {
-                // TODO: Finish from here
-            }
-
-            break;
         }
 
-        todo!()
+        // Now node has been inserted at base level we need to link the levels above
+
+        'level_loop: for level in 1..height {
+            loop {
+                // Get the predecessor + successor pointer for the node at the current level in the tower
+                let pred = Node::next(traversal_ctx.predecessors[level], level);
+                let succ = traversal_ctx.successors[level];
+
+                // Link the successor to the new node
+                //
+                let succ = traversal_ctx.successors[0] as *mut Node;
+                if !succ.is_null() {
+                    unsafe {
+                        (*Node::next(node_ptr, 0)).store(succ, Ordering::Relaxed);
+                    }
+                }
+
+                unsafe {
+                    if let Ok(_) = (*pred).compare_exchange(
+                        succ,
+                        node_ptr,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    ) {
+                        break;
+                    }
+                }
+
+                // If we fail then we must search again?
+
+                traversal_ctx = self.search(key);
+            }
+        }
+
+        node_ptr
     }
 
     // TODO: Need to implement operations for SkipList
-    // - Search
-    // - Insert
     // - Range?
-    // - Random Height Generation
+    //
+    // TODO: Need to implement Iter traits
+
+    // ------- Debug Methods ---------//
+
+    pub(super) fn validate_search(&self) {
+        let mut node = self.head.sentinel;
+    }
 }
 
 #[cfg(test)]
@@ -794,6 +833,16 @@ mod tests {
         assert!(found.is_some());
         // Get key
         assert_eq!(b"Apple", Node::get_key_bytes(found.unwrap().as_ptr()));
+
+        unsafe {
+            skip.insert(b"Mango", b"yellow", &arena);
+        }
+
+        let result_three = skip.search(b"Mango");
+        let found = result_three.searched_node;
+        assert!(found.is_some());
+        // Get key
+        assert_eq!(b"Mango", Node::get_key_bytes(found.unwrap().as_ptr()));
     }
 
     #[test]
@@ -820,5 +869,46 @@ mod tests {
         let random = skip.generate_random_level();
 
         println!("Random level: {}", random);
+    }
+
+    #[test]
+    fn basic_insert() {
+        let arena = Arena::new(
+            ArenaSize::Test(320, 640),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+
+        //
+        unsafe { skip.insert(b"Apple", b"Green", &arena) };
+        unsafe { skip.insert(b"Mango", b"Yellow", &arena) };
+        unsafe { skip.insert(b"Pear", b"Brown", &arena) };
+
+        // Search for Apple should give us Apple
+        let result = unsafe { skip.search(b"Apple") };
+        assert!(result.searched_node.is_some());
+        let node = result.searched_node.unwrap();
+        assert_eq!(b"Apple", Node::get_key_bytes(node.as_ptr()));
+
+        // Search for Mango should give us Mango
+        let result = unsafe { skip.search(b"Mango") };
+        assert!(result.searched_node.is_some());
+        let node = result.searched_node.unwrap();
+        assert_eq!(b"Mango", Node::get_key_bytes(node.as_ptr()));
+
+        // Search for Pear should give us Pear
+        let result = unsafe { skip.search(b"Pear") };
+        assert!(result.searched_node.is_some());
+        let node = result.searched_node.unwrap();
+        assert_eq!(b"Pear", Node::get_key_bytes(node.as_ptr()));
+
+        // Now random key search of Orange should be between Mango and Pear
+        let result = unsafe { skip.search(b"Orange") };
+        assert!(result.searched_node.is_none());
+        let orange_pred = Node::get_key_bytes(result.predecessors[0]);
+        let orange_succ = Node::get_key_bytes(result.successors[0] as *mut Node);
+        assert_eq!(b"Mango", orange_pred);
+        assert_eq!(b"Pear", orange_succ);
     }
 }
