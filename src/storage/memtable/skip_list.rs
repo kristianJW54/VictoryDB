@@ -19,11 +19,11 @@
 // │ value bytes / ptr   │ val_len or sizeof(ptr)
 // └─────────────────────┘
 
-use std::arch::x86_64::_mm_mask_reduce_and_epi16;
 use std::cmp::Ordering as Ord;
-use std::f64::consts::PI;
+use std::marker::PhantomData;
 use std::ops::Deref;
-use std::ptr::{self, NonNull};
+use std::ptr;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::u16::MAX;
@@ -535,7 +535,6 @@ impl SkipList {
             loop {
                 // Get the predecessor + successor pointer for the node at the current level in the tower
                 let pred = Node::next(traversal_ctx.predecessors[level], level);
-                let succ = traversal_ctx.successors[level];
 
                 // Link the successor to the new node
                 //
@@ -562,19 +561,52 @@ impl SkipList {
                 traversal_ctx = self.search(key);
             }
         }
-
         node_ptr
     }
 
-    // TODO: Need to implement operations for SkipList
-    // - Range?
-    //
-    // TODO: Need to implement Iter traits
+    pub(super) fn iter(&self) -> Iter<'_> {
+        Iter {
+            item: self.head.sentinel.as_ptr(),
+            _p: PhantomData,
+        }
+    }
 
-    // ------- Debug Methods ---------//
+    pub(super) fn seek(&self, key: &[u8]) -> Iter<'_> {
+        let mut ctx = self.search(key);
 
-    pub(super) fn validate_search(&self) {
-        let mut node = self.head.sentinel;
+        if let Some(node) = ctx.searched_node {
+            return Iter {
+                item: node.as_ptr() as *mut Node,
+                _p: PhantomData,
+            };
+        }
+
+        Iter {
+            item: ctx.successors[0] as *mut Node,
+            _p: PhantomData,
+        }
+    }
+
+    // TODO: Add range iter operation
+}
+
+pub(super) struct Iter<'a> {
+    item: *mut Node,
+    _p: PhantomData<&'a ()>,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = *mut Node;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let node = self.item;
+
+        if node.is_null() {
+            return None;
+        }
+
+        self.item = Node::load_next(node, 0, Ordering::Relaxed);
+        Some(node)
     }
 }
 
@@ -910,5 +942,36 @@ mod tests {
         let orange_succ = Node::get_key_bytes(result.successors[0] as *mut Node);
         assert_eq!(b"Mango", orange_pred);
         assert_eq!(b"Pear", orange_succ);
+    }
+
+    #[test]
+    fn basic_iter() {
+        let arena = Arena::new(
+            ArenaSize::Test(320, 640),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+
+        //
+        unsafe { skip.insert(b"Apple", b"Green", &arena) };
+        unsafe { skip.insert(b"Mango", b"Yellow", &arena) };
+        unsafe { skip.insert(b"Pear", b"Brown", &arena) };
+
+        for n in skip.iter() {
+            println!(
+                "Key => {:?}",
+                String::from_utf8_lossy(Node::get_key_bytes(n))
+            )
+        }
+
+        println!("-----");
+
+        for n in skip.seek(b"Berry") {
+            println!(
+                "Key => {:?}",
+                String::from_utf8_lossy(Node::get_key_bytes(n))
+            )
+        }
     }
 }
