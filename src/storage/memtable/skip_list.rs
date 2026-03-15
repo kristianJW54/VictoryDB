@@ -23,25 +23,23 @@ use std::cmp::Ordering as Ord;
 use std::marker::PhantomData;
 use std::ops::Bound;
 use std::ops::Deref;
-use std::ops::Range;
 use std::ops::RangeBounds;
 use std::ptr;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::u16::MAX;
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
-use std::{array, panic, slice};
+use std::{panic, slice};
 
 use crate::storage::key::comparator::{Comparator, DefaultComparator};
-use crate::storage::memory::arena::Arena;
+use crate::storage::memory::arena::{Arena, ArenaError};
 
 // ------------------------------------------------------
 
 #[derive(Debug)]
 pub(crate) enum SkipListError {
     LayoutError(std::alloc::LayoutError),
-    Arena(crate::storage::memory::arena::ArenaError),
+    Arena(ArenaError),
 }
 
 impl From<std::alloc::LayoutError> for SkipListError {
@@ -56,7 +54,8 @@ impl From<crate::storage::memory::arena::ArenaError> for SkipListError {
     }
 }
 
-// We introduce a max head height // NOTE: Later we may want this configurable
+// Max head height for the skip list
+// NOTE: Later we may want this configurable
 const MAX_HEAD_HEIGHT: usize = 8;
 
 #[repr(C)]
@@ -66,6 +65,7 @@ pub(super) struct Header {
 
 impl Header {
     fn new(memory: *mut u8) -> Self {
+        // SAFETY: Initializes the header with a sentinel node at the given memory location
         unsafe {
             let header = NonNull::new_unchecked(Node::init_node(
                 NonNull::new_unchecked(memory),
@@ -80,15 +80,18 @@ impl Header {
 
 #[repr(C)]
 pub(crate) struct Node {
-    // NOTE: Crossbeam uses refs as well here - but I think this is because it needs reclamation through EBR but since
-    // We're using Arena, refs on the node are not needed
-    //
     // Number of levels of this node
-    height: u16, // TODO: Can we make this smaller since we aren't tracking refs?
+    height: u16,
+    //
     key_len: u16,
+    //
     value_len: u32,
     //
+    // tower is a Flexible Array Member (FAM) - a variable-length array of AtomicPtr<Node> at the end of the struct
+    // Because we use Arena allocation, we don't need to track refs on the node or worry about provenance
     pub(crate) tower: [AtomicPtr<Node>; 0],
+    //
+    // NOTE: Key bytes and value Bytes are stored after the tower in the Arena allocation
 }
 
 impl Node {
@@ -99,27 +102,23 @@ impl Node {
         key_len: usize,
         value_len: usize,
     ) -> Result<Layout, SkipListError> {
-        // Get basic layout for the node
-        let mut layout = Layout::new::<Self>();
+        // Build the layout for the Node starting with the Self which accounts for the ReprC packed struct and it's fields
+        // Height, Key_len, Value_len and Tower (ZST)
+        // Then extend the layout beyond that to account for the Height of the tower,
+        // The length of the key
+        // And the length of the value
+        // After Self (Node Struct)
 
-        // Now we now extend for the height of the tower
-        layout = layout
+        Ok(Layout::new::<Self>()
             .extend(Layout::array::<AtomicPtr<Node>>(height)?)
             .map_err(SkipListError::LayoutError)?
-            .0;
-
-        // Now we add the key and value bytes length as part of the layout to be allocated
-        // These are just u8s so should be simple with no padding
-        layout = layout
+            .0
             .extend(Layout::array::<u8>(key_len)?)
             .map_err(SkipListError::LayoutError)?
-            .0;
-        layout = layout
+            .0
             .extend(Layout::array::<u8>(value_len)?)
             .map_err(SkipListError::LayoutError)?
-            .0;
-
-        Ok(layout)
+            .0)
     }
 
     #[inline]
@@ -131,6 +130,8 @@ impl Node {
     ) -> *mut Node {
         let node = ptr_memory.as_ptr() as *mut Node;
 
+        // SAFETY: ptr_memory is a NonNull<u8> allocated by Arena::alloc, so it is valid and aligned.
+        // We have already been given enough memory to write the Node struct and tower pointers so it is safe to write
         unsafe {
             ptr::write(
                 node,
@@ -148,10 +149,6 @@ impl Node {
             }
 
             node
-
-            // TODO: We could also initialize the key and value bytes to zero here OR leave MaybeUninit but we would have to ensure that
-            // we only assumit_init() when we know the key and value are initialized
-            // TODO: If we do leave MaybeUninit, how do we use assume_init() when we want to read the key and value bytes?
         }
     }
 
@@ -159,6 +156,8 @@ impl Node {
     //
     #[inline(always)]
     unsafe fn tower_ptr(node: *mut Node) -> *mut AtomicPtr<Node> {
+        // SAFETY: tower is a Flexible Array Member (FAM) at the end of the struct, so adding the offset gives us the tower ptr.
+        // We are safe to access the tower ptr because it is the start of the flexible array, and we have already allocated enough memory for it.
         unsafe { (node as *mut u8).add(core::mem::offset_of!(Node, tower)) as *mut AtomicPtr<Node> }
     }
 
@@ -167,6 +166,7 @@ impl Node {
         if !node.is_null() {
             debug_assert!(index < unsafe { (*node).height as usize });
         }
+        // SAFETY: We have checked that index is within bounds and that node is not null.
         unsafe { Self::tower_ptr(node).add(index) }
     }
 

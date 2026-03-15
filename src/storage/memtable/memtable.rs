@@ -19,10 +19,11 @@
 // Because Memtable refcounts and pins the itself,
 // the arena memory remains valid for the duration of the borrow.
 
+use std::fmt::Display;
 use std::marker::PhantomData;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::storage::memory::arena::Arena;
@@ -37,24 +38,69 @@ enum MemLifeCycle {
     Flushed = 5,
 }
 
-pub(crate) trait MemtableState {}
+impl Display for MemLifeCycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemLifeCycle::Active => write!(f, "Active"),
+            MemLifeCycle::Freezing => write!(f, "Freezing"),
+            MemLifeCycle::Frozen => write!(f, "Frozen"),
+            MemLifeCycle::Flushing => write!(f, "Flushing"),
+            MemLifeCycle::Flushed => write!(f, "Flushed"),
+        }
+    }
+}
+
+impl From<u8> for MemLifeCycle {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => MemLifeCycle::Active,
+            2 => MemLifeCycle::Freezing,
+            3 => MemLifeCycle::Frozen,
+            4 => MemLifeCycle::Flushing,
+            5 => MemLifeCycle::Flushed,
+            _ => panic!("Invalid MemLifeCycle value"),
+        }
+    }
+}
+
+pub(crate) trait MemtableState {
+    const NAME: &'static str;
+}
 
 #[derive(Debug)]
 pub(crate) struct Mutable {}
-impl MemtableState for Mutable {}
+impl MemtableState for Mutable {
+    const NAME: &'static str = "Mutable";
+}
 
 #[derive(Debug)]
 pub(crate) struct Immutable {}
-impl MemtableState for Immutable {}
+impl MemtableState for Immutable {
+    const NAME: &'static str = "Immutable";
+}
 
 #[derive(Debug)]
 pub(crate) struct Flushed {}
-impl MemtableState for Flushed {}
+impl MemtableState for Flushed {
+    const NAME: &'static str = "Flushed";
+}
+
+impl Display for Flushed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Flushed")
+    }
+}
 
 // Main Memtable - It is formed as a typestate handle over an Inner which is shared
 pub(crate) struct Memtable<S: MemtableState> {
     _state: PhantomData<S>,
     inner: Arc<MemtableInner>,
+}
+
+impl<S: MemtableState> Display for Memtable<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Memtable<{}> {{ {} }} ", S::NAME, self.inner)
+    }
 }
 
 impl<S: MemtableState> Clone for Memtable<S> {
@@ -67,52 +113,33 @@ impl<S: MemtableState> Clone for Memtable<S> {
 }
 
 pub(super) struct MemtableInner {
+    id: u64,
+    highest_seqno: AtomicU64,
+    size: AtomicU64,
     lifecycle: AtomicU8,
-    ref_count: AtomicU16,
-    in_flight_writers: AtomicU16,
+    // TODO: May want rotation request bool
     arena: Arena,
     skiplist: SkipList,
+}
+
+impl Display for MemtableInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{ lifecycle: {} }}",
+            Into::<MemLifeCycle>::into(self.lifecycle.load(Ordering::Relaxed)),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::storage::key::comparator::DefaultComparator;
-    use crate::storage::memory::allocator::SystemAllocator;
 
     #[test]
     fn mem_enum() {
         let mem = MemLifeCycle::Active;
         assert_eq!(mem as u8, 1);
-    }
-
-    #[test]
-    fn lifetime() {
-        let arena = Arena::new(
-            crate::storage::memory::ArenaSize::Test(80, 160),
-            crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
-        );
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
-        //
-        //
-        //
-        let mem: Memtable<Mutable> = Memtable {
-            _state: PhantomData,
-            inner: Arc::new(MemtableInner {
-                lifecycle: AtomicU8::new(MemLifeCycle::Active as u8),
-                ref_count: AtomicU16::new(1),
-                in_flight_writers: AtomicU16::new(0),
-                arena: arena,
-                skiplist: skip,
-            }),
-        };
-
-        let mem_cloned = mem.clone();
-
-        println!("mem {:?}", mem._state);
-        println!("mem cloned {:?}", mem_cloned._state);
-        println!("");
-        println!("mem arc ref => {:?}", Arc::strong_count(&mem.inner))
     }
 }
