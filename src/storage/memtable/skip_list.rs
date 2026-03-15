@@ -30,7 +30,7 @@ use std::u16::MAX;
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 use std::{array, panic, slice};
 
-use crate::storage::comparator::{Comparator, DefaultComparator};
+use crate::storage::key::comparator::{Comparator, DefaultComparator};
 use crate::storage::memory::arena::Arena;
 
 // ------------------------------------------------------

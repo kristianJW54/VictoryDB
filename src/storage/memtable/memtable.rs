@@ -78,7 +78,8 @@ pub(super) struct MemtableInner {
 mod tests {
 
     use super::*;
-    use crate::storage::{comparator::DefaultComparator, memory::allocator::SystemAllocator};
+    use crate::storage::key::comparator::DefaultComparator;
+    use crate::storage::memory::allocator::SystemAllocator;
 
     #[test]
     fn mem_enum() {
