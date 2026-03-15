@@ -48,10 +48,10 @@ pub(crate) struct Immutable {}
 impl MemtableState for Immutable {}
 
 #[derive(Debug)]
-pub(crate) struct Frozen {}
-impl MemtableState for Frozen {}
+pub(crate) struct Flushed {}
+impl MemtableState for Flushed {}
 
-// Main Memtable
+// Main Memtable - It is formed as a typestate handle over an Inner which is shared
 pub(crate) struct Memtable<S: MemtableState> {
     _state: PhantomData<S>,
     inner: Arc<MemtableInner>,
@@ -90,10 +90,13 @@ mod tests {
     #[test]
     fn lifetime() {
         let arena = Arena::new(
-            crate::storage::memory::ArenaSize::Test(10, 20),
+            crate::storage::memory::ArenaSize::Test(80, 160),
             crate::storage::memory::allocator::Allocator::System(SystemAllocator::new()),
         );
         let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        //
+        //
+        //
         let mem: Memtable<Mutable> = Memtable {
             _state: PhantomData,
             inner: Arc::new(MemtableInner {
@@ -108,7 +111,8 @@ mod tests {
         let mem_cloned = mem.clone();
 
         println!("mem {:?}", mem._state);
-        drop(mem);
         println!("mem cloned {:?}", mem_cloned._state);
+        println!("");
+        println!("mem arc ref => {:?}", Arc::strong_count(&mem.inner))
     }
 }

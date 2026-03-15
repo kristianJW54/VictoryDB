@@ -21,7 +21,10 @@
 
 use std::cmp::Ordering as Ord;
 use std::marker::PhantomData;
+use std::ops::Bound;
 use std::ops::Deref;
+use std::ops::Range;
+use std::ops::RangeBounds;
 use std::ptr;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -588,6 +591,19 @@ impl SkipList {
     }
 
     // TODO: Add range iter operation
+    pub(super) fn range<'a, R>(&self, bound: R) -> Iter<'_>
+    where
+        R: RangeBounds<&'a [u8]>,
+    {
+        // Resolve the bounds
+        let start = match bound.start_bound() {
+            Bound::Excluded(k) => self.seek(k),
+            Bound::Included(k) => self.seek(k),
+            Bound::Unbounded => self.iter(),
+        };
+
+        start
+    }
 }
 
 pub(super) struct Iter<'a> {
@@ -607,6 +623,21 @@ impl<'a> Iterator for Iter<'a> {
 
         self.item = Node::load_next(node, 0, Ordering::Relaxed);
         Some(node)
+    }
+}
+
+pub(super) struct RangeIter<'a> {
+    start: *mut Node,
+    end_bound: Bound<&'a [u8]>,
+}
+
+impl<'a> Iterator for RangeIter<'_> {
+    type Item = *mut Node;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let node = self.start;
+
+        todo!()
     }
 }
 
@@ -655,16 +686,9 @@ mod tests {
             );
             assert_eq!(s2, &[24u8; 1]);
         };
-
-        let node2 = unsafe { Node::alloc(&arena, 1, 1, 0) };
-        unsafe {
-            ptr::write(Node::key_ptr(node2), 89);
-        }
-        println!("arena new = {:?}", arena.get_current_init_slice());
     }
 
     #[test]
-    // TODO: Go through this and ensure that we are doing pointer access and memory handling correct
     fn level_access() {
         let arena = Arena::new(
             ArenaSize::Test(80, 160),
@@ -747,160 +771,23 @@ mod tests {
         // Mango
         // Pear
 
-        // Insert Apple first with height of 3
-        let apple_node = unsafe { Node::alloc(&arena, 3, b"Apple".len() as u16, 2) };
-        unsafe {
-            ptr::copy_nonoverlapping(b"Apple".as_ptr(), Node::key_ptr(apple_node), b"Apple".len());
-        }
+        unsafe { skip.insert(b"Apple", b"Green", &arena) };
+        unsafe { skip.insert(b"Mango", b"Yellow", &arena) };
+        unsafe { skip.insert(b"Pear", b"Brown", &arena) };
 
-        // Insert Mango with height of 2
-        let mango_node = unsafe { Node::alloc(&arena, 2, b"Mango".len() as u16, 2) };
-        unsafe {
-            ptr::copy_nonoverlapping(b"Mango".as_ptr(), Node::key_ptr(mango_node), b"Mango".len());
-        }
+        let ctx = skip.search(b"Apple");
 
-        // Insert Pear with height of 1
-        let pear_node = unsafe { Node::alloc(&arena, 1, b"Pear".len() as u16, 2) };
-        unsafe {
-            ptr::copy_nonoverlapping(b"Pear".as_ptr(), Node::key_ptr(pear_node), b"Pear".len());
-        }
-
-        // Stitch together the nodes
-
-        // Sentinel -> Apple at height 3
-        // First let's get the sentinel node at height 3
-        let s_three = Node::next(skip.head.sentinel.as_ptr(), 2);
-        // Now add in apple pointer to the sentinel's tower
-        unsafe {
-            (*s_three)
-                .compare_exchange(
-                    (*s_three).load(Ordering::Relaxed),
-                    apple_node,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .unwrap()
-        };
-        // Sentinel -> Apple at height 2
-        let s_two = Node::next(skip.head.sentinel.as_ptr(), 1);
-        unsafe {
-            (*s_two)
-                .compare_exchange(
-                    (*s_two).load(Ordering::Relaxed),
-                    apple_node,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .unwrap()
-        };
-        // Sentinel -> Apple at height 1
-        let s_one = Node::next(skip.head.sentinel.as_ptr(), 0);
-        unsafe {
-            (*s_one)
-                .compare_exchange(
-                    (*s_one).load(Ordering::Relaxed),
-                    apple_node,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .unwrap()
-        };
-
-        //
-        // Apple -> Mango at height 2
-        let apple_next = Node::next(apple_node, 1);
-        unsafe {
-            (*apple_next)
-                .compare_exchange(
-                    (*apple_next).load(Ordering::Relaxed),
-                    mango_node,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .unwrap()
-        };
-        // Apple -> Mango at height 1
-        let apple_next = Node::next(apple_node, 0);
-        unsafe {
-            (*apple_next)
-                .compare_exchange(
-                    (*apple_next).load(Ordering::Relaxed),
-                    mango_node,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .unwrap()
-        };
-        // Mango -> Pear at height 1
-        let mango_next = Node::next(mango_node, 0);
-        unsafe {
-            (*mango_next)
-                .compare_exchange(
-                    (*mango_next).load(Ordering::Relaxed),
-                    pear_node,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .unwrap()
-        };
-
-        // Now we validate
-        // First search with Banana
-        //
-
-        let result = skip.search(b"Banana");
-        // Get pred
-        let pred = result.predecessors[0];
-        let key = String::from_utf8_lossy(unsafe {
-            slice::from_raw_parts_mut(Node::key_ptr(pred), (*pred).key_len as usize)
-        });
-        assert_eq!(key.as_bytes(), "Apple".as_bytes());
-
-        // Now validate with same key 'Apple'
-        // Should get found node Apple
-        //
-        let result_two = skip.search(b"Apple");
-        // Get pred
-        let found = result_two.searched_node;
-        assert!(found.is_some());
-        // Get key
-        assert_eq!(b"Apple", Node::get_key_bytes(found.unwrap().as_ptr()));
-
-        unsafe {
-            skip.insert(b"Mango", b"yellow", &arena);
-        }
-
-        let result_three = skip.search(b"Mango");
-        let found = result_three.searched_node;
-        assert!(found.is_some());
-        // Get key
-        assert_eq!(b"Mango", Node::get_key_bytes(found.unwrap().as_ptr()));
-    }
-
-    #[test]
-    fn random_level_generation() {
-        let arena = Arena::new(
-            ArenaSize::Test(320, 640),
-            Allocator::System(SystemAllocator::new()),
+        assert!(ctx.searched_node.is_some());
+        assert_eq!(
+            Node::get_key_bytes(ctx.searched_node.unwrap().as_ptr()),
+            b"Apple"
         );
 
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        // Search for key that isn't there - should get predecessor
+        let ctx = skip.search(b"Orange");
 
-        let random = skip.generate_random_level();
-
-        println!("Random level: {}", random);
-        let random = skip.generate_random_level();
-
-        println!("Random level: {}", random);
-        let random = skip.generate_random_level();
-
-        println!("Random level: {}", random);
-        let random = skip.generate_random_level();
-
-        println!("Random level: {}", random);
-        let random = skip.generate_random_level();
-
-        println!("Random level: {}", random);
+        assert!(ctx.searched_node.is_none());
+        assert_eq!(Node::get_key_bytes(ctx.predecessors[0]), b"Mango");
     }
 
     #[test]
@@ -958,20 +845,48 @@ mod tests {
         unsafe { skip.insert(b"Mango", b"Yellow", &arena) };
         unsafe { skip.insert(b"Pear", b"Brown", &arena) };
 
-        for n in skip.iter() {
-            println!(
-                "Key => {:?}",
-                String::from_utf8_lossy(Node::get_key_bytes(n))
-            )
+        let mut keys: Vec<&[u8]> = Vec::with_capacity(4);
+
+        keys.push(b"");
+        keys.push(b"Apple");
+        keys.push(b"Mango");
+        keys.push(b"Pear");
+
+        for (i, n) in skip.iter().enumerate() {
+            assert_eq!(keys[i], Node::get_key_bytes(n))
         }
 
-        println!("-----");
+        let expected_result_from_seek = vec![2, 3];
 
-        for n in skip.seek(b"Berry") {
-            println!(
-                "Key => {:?}",
-                String::from_utf8_lossy(Node::get_key_bytes(n))
-            )
+        for (i, n) in skip.seek(b"Berry").enumerate() {
+            assert_eq!(keys[expected_result_from_seek[i]], Node::get_key_bytes(n))
+        }
+    }
+
+    #[test]
+    fn basic_range() {
+        let arena = Arena::new(
+            ArenaSize::Test(320, 640),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+
+        //
+        unsafe { skip.insert(b"Apple", b"Green", &arena) };
+        unsafe { skip.insert(b"Mango", b"Yellow", &arena) };
+        unsafe { skip.insert(b"Strawberry", b"Brown", &arena) };
+
+        let mut result = Vec::with_capacity(2);
+
+        result.push(b"Apple");
+        result.push(b"Mango");
+
+        for (i, n) in skip
+            .range(b"Apple".as_slice()..b"Mango".as_slice())
+            .enumerate()
+        {
+            println!("i => {:?}", i);
         }
     }
 }
