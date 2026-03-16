@@ -21,13 +21,14 @@
 
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::storage::memory::arena::Arena;
 use crate::storage::memtable::skip_list::SkipList;
+
+pub(crate) type MemID = u64;
 
 #[repr(u8)]
 enum MemLifeCycle {
@@ -113,7 +114,7 @@ impl<S: MemtableState> Clone for Memtable<S> {
 }
 
 pub(super) struct MemtableInner {
-    id: u64,
+    id: MemID,
     highest_seqno: AtomicU64,
     size: AtomicU64,
     lifecycle: AtomicU8,

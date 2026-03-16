@@ -194,7 +194,7 @@ impl Node {
 
     #[inline(always)]
     unsafe fn value_ptr(node: *mut Node) -> *mut u8 {
-        let value_ptr = unsafe { (Self::key_ptr(node) as *mut u8).add((*node).value_len as usize) };
+        let value_ptr = unsafe { (Self::key_ptr(node) as *mut u8).add((*node).key_len as usize) };
         value_ptr
     }
 
@@ -591,18 +591,26 @@ impl SkipList {
     }
 
     // TODO: Add range iter operation
-    pub(super) fn range<'a, R>(&self, bound: R) -> Iter<'_>
+    pub(super) fn range<'a, R>(&'a self, bound: R) -> RangeIter<'a>
     where
         R: RangeBounds<&'a [u8]>,
     {
-        // Resolve the bounds
         let start = match bound.start_bound() {
-            Bound::Excluded(k) => self.seek(k),
-            Bound::Included(k) => self.seek(k),
+            Bound::Excluded(k) => self.seek(*k),
+            Bound::Included(k) => self.seek(*k),
             Bound::Unbounded => self.iter(),
         };
 
-        start
+        let end_bound = match bound.end_bound() {
+            Bound::Included(k) => Bound::Included(*k),
+            Bound::Excluded(k) => Bound::Excluded(*k),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        RangeIter {
+            start: start.item,
+            end_bound,
+        }
     }
 }
 
@@ -631,13 +639,28 @@ pub(super) struct RangeIter<'a> {
     end_bound: Bound<&'a [u8]>,
 }
 
-impl<'a> Iterator for RangeIter<'_> {
+impl<'a> Iterator for RangeIter<'a> {
     type Item = *mut Node;
 
     fn next(&mut self) -> Option<Self::Item> {
         let node = self.start;
 
-        todo!()
+        if node.is_null() {
+            return None;
+        }
+
+        let key = unsafe { Node::get_key_bytes(node) };
+
+        match self.end_bound {
+            Bound::Excluded(bound) if key >= bound => return None,
+            Bound::Included(bound) if key > bound => return None,
+            _ => {}
+        }
+
+        // advance iterator
+        self.start = unsafe { Node::load_next(node, 0, Ordering::Relaxed) };
+
+        Some(node)
     }
 }
 
@@ -882,11 +905,12 @@ mod tests {
         result.push(b"Apple");
         result.push(b"Mango");
 
+        // Range check
         for (i, n) in skip
-            .range(b"Apple".as_slice()..b"Mango".as_slice())
+            .range(b"Apple".as_slice()..b"Strawberry".as_slice())
             .enumerate()
         {
-            println!("i => {:?}", i);
+            assert_eq!(result[i], (Node::get_key_bytes(n)));
         }
     }
 }
