@@ -25,6 +25,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
+use crate::storage::key::comparator::Comparator;
+use crate::storage::memory::ArenaSize;
+use crate::storage::memory::allocator::Allocator;
 use crate::storage::memory::arena::Arena;
 use crate::storage::memtable::skip_list::SkipList;
 
@@ -130,6 +133,30 @@ impl Display for MemtableInner {
             "{{ lifecycle: {} }}",
             Into::<MemLifeCycle>::into(self.lifecycle.load(Ordering::Relaxed)),
         )
+    }
+}
+
+impl MemtableInner {
+    fn new(
+        id: MemID,
+        arena_size: ArenaSize,
+        allocator: Allocator,
+        comp: Arc<dyn Comparator>,
+    ) -> Self {
+        let arena = Arena::new(arena_size, allocator);
+        let skiplist = SkipList::new(comp, &arena);
+        Self {
+            id,
+            highest_seqno: AtomicU64::new(0),
+            size: AtomicU64::new(0),
+            lifecycle: AtomicU8::new(MemLifeCycle::Active as u8),
+            arena: arena,
+            skiplist,
+        }
+    }
+
+    fn search(&self, key: &[u8]) -> Option<&[u8]> {
+        todo!()
     }
 }
 

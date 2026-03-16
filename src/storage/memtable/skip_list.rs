@@ -337,10 +337,7 @@ pub(super) struct SkipList {
 /// Level 1 :             A        B -----> C   (found)
 
 impl SkipList {
-    pub(super) fn new(
-        comparator: Arc<dyn Comparator>,
-        arena: &Arena,
-    ) -> Result<Self, SkipListError> {
+    pub(super) fn new(comparator: Arc<dyn Comparator>, arena: &Arena) -> Self {
         let data = CachePadded {
             value: Data {
                 seed: AtomicUsize::new(Self::seed_generator(1)),
@@ -352,11 +349,11 @@ impl SkipList {
         let head =
             unsafe { NonNull::new_unchecked(Node::alloc(arena, MAX_HEAD_HEIGHT as u16, 0, 0)) };
 
-        Ok(Self {
+        Self {
             head: Header { sentinel: head },
             data,
             comparator,
-        })
+        }
     }
 
     // Generates a random seed for the xorshift random number generator
@@ -412,7 +409,7 @@ impl SkipList {
         height
     }
 
-    fn search(&self, key: &[u8]) -> TraversalCtx {
+    pub(super) fn search(&self, key: &[u8]) -> TraversalCtx {
         //
 
         // We need an outer loop so that we can reattempt the search if we encounter a concurrent modification
@@ -717,7 +714,7 @@ mod tests {
             ArenaSize::Test(80, 160),
             Allocator::System(SystemAllocator::new()),
         );
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
 
         // Let's get the base level
         let base = Node::next(skip.head.sentinel.as_ptr(), 0);
@@ -787,7 +784,7 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
         );
 
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
 
         // Keys we want:
         // Apple
@@ -820,7 +817,7 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
         );
 
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
 
         //
         unsafe { skip.insert(b"Apple", b"Green", &arena) };
@@ -861,7 +858,7 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
         );
 
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
 
         //
         unsafe { skip.insert(b"Apple", b"Green", &arena) };
@@ -893,7 +890,7 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
         );
 
-        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena).unwrap();
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
 
         //
         unsafe { skip.insert(b"Apple", b"Green", &arena) };
