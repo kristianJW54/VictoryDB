@@ -1,5 +1,6 @@
 //
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 pub trait Comparator: Send + Sync {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering;
@@ -7,6 +8,14 @@ pub trait Comparator: Send + Sync {
 }
 
 pub struct DefaultComparator {}
+
+pub(crate) type DefaultComparatorArc = Arc<DefaultComparator>;
+
+impl DefaultComparator {
+    pub(crate) fn new() -> DefaultComparatorArc {
+        Arc::new(DefaultComparator {})
+    }
+}
 
 impl Comparator for DefaultComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {

@@ -217,6 +217,10 @@ impl Node {
         unsafe { slice::from_raw_parts(Node::key_ptr(node), (*node).key_len as usize) }
     }
 
+    pub(super) fn get_value_bytes<'a>(node: *mut Node) -> &'a [u8] {
+        unsafe { slice::from_raw_parts(Node::value_ptr(node), (*node).value_len as usize) }
+    }
+
     pub(super) fn load_next(node: *mut Node, level: usize, ordering: Ordering) -> *mut Node {
         debug_assert!(level < MAX_HEAD_HEIGHT);
         unsafe { (*Self::next(node, level)).load(ordering) }

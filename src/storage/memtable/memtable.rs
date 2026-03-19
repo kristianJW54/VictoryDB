@@ -21,6 +21,7 @@
 
 use std::fmt::Display;
 use std::marker::PhantomData;
+use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
@@ -29,7 +30,7 @@ use crate::storage::key::comparator::Comparator;
 use crate::storage::memory::ArenaSize;
 use crate::storage::memory::allocator::Allocator;
 use crate::storage::memory::arena::Arena;
-use crate::storage::memtable::skip_list::SkipList;
+use crate::storage::memtable::skip_list::{Iter, Node, SkipList};
 
 pub(crate) type MemID = u64;
 
@@ -107,6 +108,31 @@ impl<S: MemtableState> Display for Memtable<S> {
     }
 }
 
+impl Memtable<Mutable> {
+    //
+    pub(crate) fn new(
+        id: MemID,
+        arena_size: ArenaSize,
+        allocator: Allocator,
+        comp: Arc<dyn Comparator>,
+    ) -> Self {
+        Self {
+            _state: PhantomData,
+            inner: Arc::new(MemtableInner::new(id, arena_size, allocator, comp)),
+        }
+    }
+
+    pub(crate) fn insert(&self, key: &[u8], value: &[u8]) {
+        self.inner.insert(key, value)
+    }
+
+    pub(crate) fn get(&self, key: &[u8]) -> Option<&[u8]> {
+        // TODO: Need to change to internal key logic where we seek instead and return value against the searched internal key and
+        // that is not tombstoned
+        self.inner.search(key)
+    }
+}
+
 impl<S: MemtableState> Clone for Memtable<S> {
     fn clone(&self) -> Self {
         Self {
@@ -156,9 +182,34 @@ impl MemtableInner {
     }
 
     fn search(&self, key: &[u8]) -> Option<&[u8]> {
-        todo!()
+        if let Some(node) = self.skiplist.search(key).searched_node {
+            return Some(Node::get_value_bytes(node.as_ptr()));
+        }
+        None
+    }
+
+    fn insert(&self, key: &[u8], value: &[u8]) {
+        let _ = unsafe { self.skiplist.insert(key, value, &self.arena) };
+    }
+
+    fn iter(&self) -> MemtableIterator<'_> {
+        MemtableIterator {
+            item: self.skiplist.iter(),
+        }
+    }
+
+    fn iter_from(&self, key: &[u8]) -> MemtableIterator<'_> {
+        MemtableIterator {
+            item: self.skiplist.seek(key),
+        }
     }
 }
+
+pub(crate) struct MemtableIterator<'a> {
+    item: Iter<'a>,
+}
+
+// TODO: Implement MergeIterator for MemtableIterator
 
 #[cfg(test)]
 mod tests {
