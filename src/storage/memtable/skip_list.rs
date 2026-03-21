@@ -542,10 +542,116 @@ impl SkipList {
 
                 // Link the successor to the new node
                 //
-                let succ = traversal_ctx.successors[0] as *mut Node;
+                let succ = traversal_ctx.successors[level] as *mut Node;
                 if !succ.is_null() {
                     unsafe {
-                        (*Node::next(node_ptr, 0)).store(succ, Ordering::Relaxed);
+                        (*Node::next(node_ptr, level)).store(succ, Ordering::Relaxed);
+                    }
+                }
+
+                unsafe {
+                    if let Ok(_) = (*pred).compare_exchange(
+                        succ,
+                        node_ptr,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    ) {
+                        break;
+                    }
+                }
+
+                // If we fail then we must search again?
+
+                traversal_ctx = self.search(key);
+            }
+        }
+        node_ptr
+    }
+
+    pub(crate) unsafe fn insert_with<'a, F>(
+        &self,
+        key_len: u16,
+        value: &[u8],
+        arena: &Arena,
+        f: F,
+    ) -> *mut Node
+    where
+        F: FnOnce(*mut Node),
+    {
+        debug_assert!(key_len <= u16::MAX);
+
+        // Build the new node to insert into the searched position
+        self.data.entries.fetch_add(1, Ordering::Relaxed);
+
+        let height = self.generate_random_level();
+        debug_assert!(height <= MAX_HEAD_HEIGHT);
+        debug_assert!(height <= u16::MAX as usize);
+
+        let node_ptr = unsafe { Node::alloc(arena, height as u16, key_len, value.len() as u32) };
+
+        unsafe {
+            // Write the key and value into the node
+            f(node_ptr);
+            ptr::copy_nonoverlapping(value.as_ptr(), Node::value_ptr(node_ptr), value.len());
+        }
+
+        // We search down here and optimistically assume the node is not present and allocating is ok to do so
+        //
+        let key = Node::get_key_bytes(node_ptr);
+
+        let mut traversal_ctx = self.search(key);
+
+        if let Some(node) = traversal_ctx.searched_node {
+            return node.as_ptr();
+        }
+        //
+        // Enter into the CAS loop to insert the node at the base level
+        // We need to make sure we insert the node successfully before we build the higher levels above to link the rest of the skip list
+        loop {
+            //
+            // We need to take the new node we created and insert the successor at the base level into the node's tower at the base
+
+            let succ = traversal_ctx.successors[0] as *mut Node;
+            if !succ.is_null() {
+                unsafe {
+                    (*Node::next(node_ptr, 0)).store(succ, Ordering::Relaxed);
+                }
+            }
+
+            unsafe {
+                // Now we CAS on the predecessor base pointer to add our new node to it
+
+                let pred = Node::next(traversal_ctx.predecessors[0], 0);
+
+                if (*pred)
+                    .compare_exchange(succ, node_ptr, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    break;
+                }
+
+                // We failed to CAS, search again and retry - // TODO: Do we want metrics here do measure contention?
+                traversal_ctx = self.search(key);
+
+                if let Some(node) = traversal_ctx.searched_node {
+                    return node.as_ptr();
+                }
+            }
+        }
+
+        // Now node has been inserted at base level we need to link the levels above
+
+        'level_loop: for level in 1..height {
+            loop {
+                // Get the predecessor + successor pointer for the node at the current level in the tower
+                let pred = Node::next(traversal_ctx.predecessors[level], level);
+
+                // Link the successor to the new node
+                //
+                let succ = traversal_ctx.successors[level] as *mut Node;
+                if !succ.is_null() {
+                    unsafe {
+                        (*Node::next(node_ptr, level)).store(succ, Ordering::Relaxed);
                     }
                 }
 
@@ -853,6 +959,94 @@ mod tests {
         let orange_succ = Node::get_key_bytes(result.successors[0] as *mut Node);
         assert_eq!(b"Mango", orange_pred);
         assert_eq!(b"Pear", orange_succ);
+    }
+
+    #[test]
+    fn direct_insert() {
+        let arena = Arena::new(
+            ArenaSize::Test(320, 640),
+            Allocator::System(SystemAllocator::new()),
+        );
+
+        let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
+
+        struct tricky_key<'a> {
+            key: &'a [u8],
+            logic: u16,
+        }
+
+        impl tricky_key<'_> {
+            fn len(&self) -> u16 {
+                self.key.len() as u16 + 2
+            }
+
+            fn to_vec(&self) -> Vec<u8> {
+                let mut v = Vec::with_capacity(self.key.len() + 2);
+
+                v.extend_from_slice(self.key);
+                v.extend_from_slice(&self.logic.to_le_bytes());
+
+                v
+            }
+        }
+
+        // Insert a tricky key direct to arena without making a separate allocation
+        //
+
+        let key_1 = tricky_key {
+            key: "Apple".as_bytes(),
+            logic: 1,
+        };
+        let key_2 = tricky_key {
+            key: "Mango".as_bytes(),
+            logic: 2,
+        };
+        let key_3 = tricky_key {
+            key: "Pear".as_bytes(),
+            logic: 3,
+        };
+
+        unsafe {
+            let _ = skip.insert_with(key_1.len(), b"apple_value", &arena, |n| {
+                ptr::copy_nonoverlapping(key_1.key.as_ptr(), Node::key_ptr(n), key_1.key.len());
+                ptr::copy_nonoverlapping(
+                    key_1.logic.to_le_bytes().as_ptr(),
+                    Node::key_ptr(n).add(key_1.key.len()),
+                    2,
+                )
+            });
+            let _ = skip.insert_with(key_2.len(), b"mango_value", &arena, |n| {
+                ptr::copy_nonoverlapping(key_2.key.as_ptr(), Node::key_ptr(n), key_2.key.len());
+                ptr::copy_nonoverlapping(
+                    key_2.logic.to_le_bytes().as_ptr(),
+                    Node::key_ptr(n).add(key_2.key.len()),
+                    2,
+                )
+            });
+            let _ = skip.insert_with(key_3.len(), b"pear_value", &arena, |n| {
+                ptr::copy_nonoverlapping(key_3.key.as_ptr(), Node::key_ptr(n), key_3.key.len());
+                ptr::copy_nonoverlapping(
+                    key_3.logic.to_le_bytes().as_ptr(),
+                    Node::key_ptr(n).add(key_3.key.len()),
+                    2,
+                )
+            });
+        }
+
+        // Search for Apple should give us Apple
+
+        let apple = key_1.to_vec();
+        let result = unsafe { skip.search(&apple) };
+        assert!(result.searched_node.is_some());
+        let node = result.searched_node.unwrap();
+        assert_eq!(&apple, Node::get_key_bytes(node.as_ptr()));
+
+        // Search for Mango should give us Mango
+        let mango = key_2.to_vec();
+        let result = unsafe { skip.search(&mango) };
+        assert!(result.searched_node.is_some());
+        let node = result.searched_node.unwrap();
+        assert_eq!(&mango, Node::get_key_bytes(node.as_ptr()));
     }
 
     #[test]

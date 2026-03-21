@@ -1,7 +1,5 @@
 pub mod comparator;
-
-// TODO: Finish the internal key logic
-pub(crate) struct InternalKey<'a>(&'a [u8]);
+pub mod internal_key;
 
 // TODO: Handling User key allocation
 // NOTE: On the write path we simply encode the internal key and write directly into memtable arena

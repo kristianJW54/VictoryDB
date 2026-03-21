@@ -7,7 +7,7 @@ pub trait Comparator: Send + Sync {
     // TODO: Add separator and successor and other signatures we may need
 }
 
-pub struct DefaultComparator {}
+pub(crate) struct DefaultComparator {}
 
 pub(crate) type DefaultComparatorArc = Arc<DefaultComparator>;
 
@@ -20,5 +20,21 @@ impl DefaultComparator {
 impl Comparator for DefaultComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         a.cmp(b)
+    }
+}
+
+pub(crate) struct InternalKeyComparator {}
+
+pub(crate) type InternalKeyComparatorArc = Arc<InternalKeyComparator>;
+
+impl InternalKeyComparator {
+    pub(crate) fn new() -> InternalKeyComparatorArc {
+        Arc::new(InternalKeyComparator {})
+    }
+}
+
+impl Comparator for InternalKeyComparator {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+        todo!()
     }
 }

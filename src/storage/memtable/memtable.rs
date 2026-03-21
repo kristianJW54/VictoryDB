@@ -181,6 +181,10 @@ impl MemtableInner {
         }
     }
 
+    unsafe fn encode_key(&self, ptr: *mut Node, user_key: &[u8], seq_no: u32, op_type: u32) {
+        todo!()
+    }
+
     fn search(&self, key: &[u8]) -> Option<&[u8]> {
         if let Some(node) = self.skiplist.search(key).searched_node {
             return Some(Node::get_value_bytes(node.as_ptr()));
@@ -191,6 +195,10 @@ impl MemtableInner {
     fn insert(&self, key: &[u8], value: &[u8]) {
         let _ = unsafe { self.skiplist.insert(key, value, &self.arena) };
     }
+
+    // NOTE: If we insert direct we have to make sure that the internal key seq no is greater than the highest seq no so we don't fail on insert and alloc
+    // A dead node
+    fn insert_direct() {}
 
     fn iter(&self) -> MemtableIterator<'_> {
         MemtableIterator {
