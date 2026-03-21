@@ -16,7 +16,7 @@ impl WritePath for Buffered {}
 #[cfg(feature = "arena_direct")]
 pub(crate) type ArenaDirectWriter = Writer<ArenaDirect>;
 
-#[cfg(feature = "buffered")]
+#[cfg(feature = "buffered_key_writer")]
 pub(crate) type BufferedWriter = Writer<Buffered>;
 
 pub(crate) struct Writer<W: WritePath> {
