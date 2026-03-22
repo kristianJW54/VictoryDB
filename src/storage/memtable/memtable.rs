@@ -27,12 +27,21 @@ use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::storage::key::comparator::Comparator;
+use crate::storage::key::internal_key::LookupKey;
 use crate::storage::memory::ArenaSize;
 use crate::storage::memory::allocator::Allocator;
 use crate::storage::memory::arena::Arena;
 use crate::storage::memtable::skip_list::{Iter, Node, SkipList};
 
 pub(crate) type MemID = u64;
+
+#[derive(Debug)]
+enum MemReturn<'a> {
+    NotFound,
+    Merge,
+    Deleted,
+    Value(&'a [u8]),
+}
 
 #[repr(u8)]
 enum MemLifeCycle {
@@ -108,6 +117,16 @@ impl<S: MemtableState> Display for Memtable<S> {
     }
 }
 
+impl<S: MemtableState> Memtable<S> {
+    pub(crate) fn new_memtable() -> Memtable<Mutable> {
+        todo!()
+    }
+
+    unsafe fn encode_key(&self, ptr: *mut Node, user_key: &[u8], seq_no: u32, op_type: u32) {
+        todo!()
+    }
+}
+
 impl Memtable<Mutable> {
     //
     pub(crate) fn new(
@@ -126,10 +145,13 @@ impl Memtable<Mutable> {
         self.inner.insert(key, value)
     }
 
-    pub(crate) fn get(&self, key: &[u8]) -> Option<&[u8]> {
-        // TODO: Need to change to internal key logic where we seek instead and return value against the searched internal key and
-        // that is not tombstoned
-        self.inner.search(key)
+    pub(crate) fn get(&self, key: LookupKey) -> MemReturn<'_> {
+        // NOTE: We would do a range deletion pass
+        // NOTE: We would then do a bloom filter check?
+        //
+        // We seek the key in the skiplist and based on the result, we return MemGet::NotFound, MemGet::Merge, MemGet::Deleted, or MemGet::Value
+
+        todo!()
     }
 }
 
@@ -179,10 +201,6 @@ impl MemtableInner {
             arena: arena,
             skiplist,
         }
-    }
-
-    unsafe fn encode_key(&self, ptr: *mut Node, user_key: &[u8], seq_no: u32, op_type: u32) {
-        todo!()
     }
 
     fn search(&self, key: &[u8]) -> Option<&[u8]> {

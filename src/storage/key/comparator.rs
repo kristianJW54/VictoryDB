@@ -35,6 +35,11 @@ impl InternalKeyComparator {
 
 impl Comparator for InternalKeyComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        todo!()
+        let (user_key, trailer) = a.split_at(&a.len() - 8);
+        let (b_user_key, b_trailer) = b.split_at(&b.len() - 8);
+        match user_key.cmp(b_user_key) {
+            Ordering::Equal => trailer.cmp(b_trailer),
+            other => other,
+        }
     }
 }
