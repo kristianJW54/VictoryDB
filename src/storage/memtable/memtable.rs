@@ -117,6 +117,15 @@ impl<S: MemtableState> Display for Memtable<S> {
     }
 }
 
+impl<S: MemtableState> Clone for Memtable<S> {
+    fn clone(&self) -> Self {
+        Self {
+            _state: PhantomData,
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl<S: MemtableState> Memtable<S> {
     pub(crate) fn new_memtable() -> Memtable<Mutable> {
         todo!()
@@ -155,15 +164,6 @@ impl Memtable<Mutable> {
     }
 }
 
-impl<S: MemtableState> Clone for Memtable<S> {
-    fn clone(&self) -> Self {
-        Self {
-            _state: PhantomData,
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 pub(super) struct MemtableInner {
     id: MemID,
     highest_seqno: AtomicU64,
@@ -172,6 +172,10 @@ pub(super) struct MemtableInner {
     // TODO: May want rotation request bool
     arena: Arena,
     skiplist: SkipList,
+    // TODO: Add RangeDel skiplist?
+    // TODO: Add RangeKey skiplist?
+    // TODO: Add RangeDelSpan ?
+    // TODO: Add RangeKeySpan ?
 }
 
 impl Display for MemtableInner {
@@ -233,9 +237,8 @@ impl MemtableInner {
 
 pub(crate) struct MemtableIterator<'a> {
     item: Iter<'a>,
+    current: Option<(&'a [u8], &'a [u8])>,
 }
-
-// TODO: Implement MergeIterator for MemtableIterator
 
 #[cfg(test)]
 mod tests {

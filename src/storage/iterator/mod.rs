@@ -1,3 +1,5 @@
+pub(crate) mod internal_iterator;
+
 // +-------------------------------+
 // |                               |
 // | ArenaWrappedDBIter            |
