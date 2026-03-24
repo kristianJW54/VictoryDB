@@ -21,11 +21,13 @@
 
 use std::fmt::Display;
 use std::marker::PhantomData;
+use std::ptr::NonNull;
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
+use crate::storage::iterator::internal_iterator::InternalIterator;
 use crate::storage::key::comparator::Comparator;
 use crate::storage::key::internal_key::LookupKey;
 use crate::storage::memory::ArenaSize;
@@ -188,6 +190,7 @@ impl Display for MemtableInner {
     }
 }
 
+// TODO: Need to think about the operations and what they return (do we return value bytes? or something which can give us value bytes?)
 impl MemtableInner {
     fn new(
         id: MemID,
@@ -224,20 +227,35 @@ impl MemtableInner {
 
     fn iter(&self) -> MemtableIterator<'_> {
         MemtableIterator {
+            head: self.skiplist.head(),
             item: self.skiplist.iter(),
+            current: None,
         }
     }
 
     fn iter_from(&self, key: &[u8]) -> MemtableIterator<'_> {
         MemtableIterator {
+            head: self.skiplist.head(),
             item: self.skiplist.seek(key),
+            current: None,
         }
     }
 }
 
 pub(crate) struct MemtableIterator<'a> {
+    head: *mut Node,
     item: Iter<'a>,
-    current: Option<(&'a [u8], &'a [u8])>,
+    current: Option<NonNull<Node>>,
+}
+
+impl<'a> InternalIterator for MemtableIterator<'a> {
+    fn seek_to_first(&mut self) {
+        self.item = Iter::new(self.head);
+        self.current = self
+            .item
+            .next()
+            .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+    }
 }
 
 #[cfg(test)]

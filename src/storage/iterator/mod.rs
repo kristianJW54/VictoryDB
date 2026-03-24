@@ -1,4 +1,6 @@
+pub(crate) mod db_iter;
 pub(crate) mod internal_iterator;
+pub(crate) mod iter_alloc;
 
 // +-------------------------------+
 // |                               |

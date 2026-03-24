@@ -5,8 +5,12 @@ use crate::storage::key::internal_key::LookupKey;
 pub(crate) trait InternalIterator {
     // Static methods
 
-    fn Seek_to_first(&mut self);
-    fn Seek(&mut self, key: LookupKey);
+    fn seek_to_first(&mut self);
+    // fn seek(&mut self, key: LookupKey);
+    // fn valid(&self) -> bool;
 
     // Relative methods
+    // fn next(&mut self) -> Option<&[u8]>;
+    // fn key(&self) -> Option<&[u8]>;
+    // fn value(&self) -> Option<&[u8]>;
 }

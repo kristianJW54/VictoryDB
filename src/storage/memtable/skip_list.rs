@@ -360,6 +360,10 @@ impl SkipList {
         }
     }
 
+    pub(super) fn head(&self) -> *mut Node {
+        self.head.sentinel.as_ptr()
+    }
+
     // Generates a random seed for the xorshift random number generator
     fn seed_generator(seed: usize) -> usize {
         let mut x: usize = seed;
@@ -724,6 +728,15 @@ impl SkipList {
 pub(super) struct Iter<'a> {
     item: *mut Node,
     _p: PhantomData<&'a ()>,
+}
+
+impl<'a> Iter<'a> {
+    pub(super) fn new(item: *mut Node) -> Self {
+        Self {
+            item,
+            _p: PhantomData,
+        }
+    }
 }
 
 impl<'a> Iterator for Iter<'a> {
