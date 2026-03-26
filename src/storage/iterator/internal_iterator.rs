@@ -1,4 +1,4 @@
-use crate::storage::key::internal_key::LookupKey;
+use crate::storage::key::internal_key::InternalKey;
 
 // Internal Iterator is the trait for which all internal iterators must implement.
 //

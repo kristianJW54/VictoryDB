@@ -32,6 +32,7 @@ use std::{alloc::Layout, sync::atomic::AtomicPtr};
 use std::{panic, slice};
 
 use crate::storage::key::comparator::{Comparator, DefaultComparator};
+use crate::storage::key::internal_key::InternalKeyRef;
 use crate::storage::memory::arena::{Arena, ArenaError};
 
 // ------------------------------------------------------
@@ -184,7 +185,7 @@ impl Node {
     }
 
     #[inline(always)]
-    unsafe fn key_ptr(node: *mut Node) -> *mut u8 {
+    pub(super) unsafe fn key_ptr(node: *mut Node) -> *mut u8 {
         let key_ptr = unsafe {
             (Self::tower_ptr(node) as *mut u8)
                 .add((*node).height as usize * std::mem::size_of::<AtomicPtr<Node>>())
@@ -193,7 +194,7 @@ impl Node {
     }
 
     #[inline(always)]
-    unsafe fn value_ptr(node: *mut Node) -> *mut u8 {
+    pub(super) unsafe fn value_ptr(node: *mut Node) -> *mut u8 {
         let value_ptr = unsafe { (Self::key_ptr(node) as *mut u8).add((*node).key_len as usize) };
         value_ptr
     }
@@ -457,6 +458,11 @@ impl SkipList {
                 // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
                 match self.comparator.compare(node_key, key) {
                     Ord::Less => {
+                        println!(
+                            "Comparing -> [{} | {}] -- Less",
+                            InternalKeyRef::from(node_key),
+                            InternalKeyRef::from(key)
+                        );
                         pred = curr;
                         curr = Node::load_next(pred, level, Ordering::Relaxed);
                     }
@@ -465,6 +471,11 @@ impl SkipList {
                         break;
                     }
                     Ord::Greater => {
+                        println!(
+                            "Comparing -> [{} | {}] -- Greater",
+                            InternalKeyRef::from(node_key),
+                            InternalKeyRef::from(key)
+                        );
                         break;
                     }
                 }
@@ -572,6 +583,8 @@ impl SkipList {
         node_ptr
     }
 
+    /// insert_with pre-emptively allocates a node using it's layout into the arena and calls a closure with the node pointer to write directly
+    /// into the arena. This allows direct arena allocation without having to pre-allocate objects to pass down.
     pub(crate) unsafe fn insert_with<'a, F>(
         &self,
         key_len: u16,

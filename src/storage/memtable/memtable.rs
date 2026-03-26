@@ -1,27 +1,8 @@
 // Memtable
 
-// The memtable needs to be able to track the number of active readers and writers threads on live in-flight operations
-// This will be used to ensure that the memtable is not dropped or underlying arena doesn't reset leaving us pointing to invalid memory locations
-// We also need to track state flags such as whether the memtable is active, immutable, flushing or cleared.
-//
-// // All public methods on Memtable return either:
-//
-// 1) A lifetime-bound reference (&'a [u8]) tied to &self
-//    — ensuring the returned data cannot outlive the borrowed handle.
-//
-// 2) An owned copy (e.g. Vec<u8>) if the data must outlive the handle.
-//
-// Internally, the handle dereferences MemtableInner via raw pointers and
-// the skiplist returns a RawSlice { ptr, len } pointing into arena memory.
-// That RawSlice is then unsafely converted into &'a [u8], where 'a is
-// tied to &self.
-//
-// Because Memtable refcounts and pins the itself,
-// the arena memory remains valid for the duration of the borrow.
-
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
@@ -29,7 +10,9 @@ use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::storage::iterator::internal_iterator::InternalIterator;
 use crate::storage::key::comparator::Comparator;
-use crate::storage::key::internal_key::LookupKey;
+use crate::storage::key::internal_key::{
+    InternalKey, InternalKeyRef, LookupKey, OperationType, encode_trailer,
+};
 use crate::storage::memory::ArenaSize;
 use crate::storage::memory::allocator::Allocator;
 use crate::storage::memory::arena::Arena;
@@ -37,8 +20,8 @@ use crate::storage::memtable::skip_list::{Iter, Node, SkipList};
 
 pub(crate) type MemID = u64;
 
-#[derive(Debug)]
-enum MemReturn<'a> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MemReturn<'a> {
     NotFound,
     Merge,
     Deleted,
@@ -157,12 +140,24 @@ impl Memtable<Mutable> {
     }
 
     pub(crate) fn get(&self, key: LookupKey) -> MemReturn<'_> {
-        // NOTE: We would do a range deletion pass
-        // NOTE: We would then do a bloom filter check?
-        //
-        // We seek the key in the skiplist and based on the result, we return MemGet::NotFound, MemGet::Merge, MemGet::Deleted, or MemGet::Value
+        if let Some((skip_key, v)) = self.inner.first_ge(key.as_ref()) {
+            let sk = InternalKeyRef::from(skip_key);
+            let lookup = InternalKeyRef::from(key.as_ref());
 
-        todo!()
+            if sk.user_key != lookup.user_key {
+                return MemReturn::NotFound;
+            }
+
+            match sk.op.into() {
+                OperationType::Put => MemReturn::Value(v),
+                OperationType::Delete => MemReturn::Deleted,
+                OperationType::Merge => MemReturn::Merge,
+                OperationType::RangeDelete => MemReturn::Deleted,
+                _ => unreachable!(),
+            }
+        } else {
+            MemReturn::NotFound
+        }
     }
 }
 
@@ -210,9 +205,13 @@ impl MemtableInner {
         }
     }
 
-    fn search(&self, key: &[u8]) -> Option<&[u8]> {
-        if let Some(node) = self.skiplist.search(key).searched_node {
-            return Some(Node::get_value_bytes(node.as_ptr()));
+    fn first_ge(&self, key: &[u8]) -> Option<(&[u8], &[u8])> {
+        let node = self.skiplist.search(key).successors[0];
+        if !node.is_null() {
+            return Some((
+                Node::get_key_bytes(node as *mut Node),
+                Node::get_value_bytes(node as *mut Node),
+            ));
         }
         None
     }
@@ -223,7 +222,27 @@ impl MemtableInner {
 
     // NOTE: If we insert direct we have to make sure that the internal key seq no is greater than the highest seq no so we don't fail on insert and alloc
     // A dead node
-    fn insert_direct() {}
+    fn insert_direct(&self, user_key: &[u8], seq_no: u64, op_type: OperationType, value: &[u8]) {
+        let user_key_len = user_key.len();
+
+        unsafe {
+            self.skiplist
+                .insert_with((user_key_len + 8) as u16, value, &self.arena, |node_ptr| {
+                    // Insert the user key
+                    ptr::copy_nonoverlapping(
+                        user_key.as_ptr(),
+                        Node::key_ptr(node_ptr),
+                        user_key_len,
+                    );
+                    // Insert the trailer
+                    ptr::copy_nonoverlapping(
+                        encode_trailer(seq_no, op_type).as_ptr(),
+                        Node::key_ptr(node_ptr).add(user_key_len),
+                        8,
+                    );
+                });
+        }
+    }
 
     fn iter(&self) -> MemtableIterator<'_> {
         MemtableIterator {

@@ -9,11 +9,16 @@
 
 //
 
+use std::fmt::Display;
+
 const INLINE_IK_SIZE: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(crate) enum OperationType {
+    // NOTE: Put is aslo used as a sentinel value for lookup operations, because OperationType factors into the comparison order as it is packed into
+    // the trailer (seq_no << 8) | op_type we must make sure that any LookupKey is not overshooting skip list keys so we give it zero op_type and let
+    // the seq_no be the comparisons decider
     Put = 1,
     Delete = 2,
     Merge = 3,       // TODO: Implement Merge Operation into the system
@@ -34,6 +39,17 @@ impl From<u8> for OperationType {
             3 => OperationType::Merge,
             4 => OperationType::RangeDelete,
             _ => unreachable!(),
+        }
+    }
+}
+
+impl Display for OperationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OperationType::Put => write!(f, "Put"),
+            OperationType::Delete => write!(f, "Delete"),
+            OperationType::Merge => write!(f, "Merge"),
+            OperationType::RangeDelete => write!(f, "RangeDelete"),
         }
     }
 }
@@ -78,17 +94,100 @@ fn extract_op_raw(trailer: u64) -> u8 {
 }
 
 // TODO: Finish the internal key logic
-pub(crate) struct InternalKeyRef<'a>(&'a [u8]);
+pub(crate) struct InternalKeyRef<'a> {
+    pub(crate) user_key: &'a [u8],
+    pub(crate) seq_no: u64,
+    pub(crate) op: u8,
+}
+
+impl<'a> InternalKeyRef<'a> {
+    pub(crate) fn from(key: &'a [u8]) -> Self {
+        debug_assert!(key.len() >= 8, "InternalKey must include trailer");
+
+        let (user_key, trailer_bytes) = key.split_at(key.len() - 8);
+        let trailer = u64::from_be_bytes(trailer_bytes.try_into().unwrap());
+
+        let (seq_no, op) = unpack_trailer_raw(trailer);
+
+        Self {
+            user_key,
+            seq_no,
+            op,
+        }
+    }
+}
+
+impl<'a> Display for InternalKeyRef<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key = String::from_utf8_lossy(self.user_key);
+        write!(
+            f,
+            "Key: {} SeqNo: {} Op: {}",
+            key,
+            self.seq_no,
+            OperationType::from(self.op)
+        )
+    }
+}
 
 //
 // LookupKey is a temporary struct used for internal key operations. Mainly on read and search operations but the LookupKey can
 // also be used by the writer on the write path if Arena Direct is not selected. This way a temp scratch buffer or inline key will be created on
 // write operations also.
 #[repr(C)]
-pub(crate) struct LookupKey {
+pub(crate) struct InternalKey {
     len: u32,
     inline: [u8; INLINE_IK_SIZE],
     heap: Option<Box<[u8]>>,
+}
+
+impl InternalKey {
+    pub(crate) fn new(key: &[u8], seq_no: u64, op_type: OperationType) -> Self {
+        let trailer = encode_trailer(seq_no, op_type);
+        let len_key = key.len() + 8;
+
+        let mut this = Self {
+            len: len_key as u32,
+            inline: [0u8; INLINE_IK_SIZE],
+            heap: None,
+        };
+
+        if len_key <= INLINE_IK_SIZE {
+            this.inline[..key.len()].copy_from_slice(key);
+            this.inline[key.len()..].copy_from_slice(&trailer);
+        } else {
+            let mut buf = vec![0u8; len_key].into_boxed_slice();
+            buf[..key.len()].copy_from_slice(key);
+            buf[key.len()..].copy_from_slice(&trailer);
+            this.heap = Some(buf);
+        }
+
+        this
+    }
+}
+
+impl AsRef<[u8]> for InternalKey {
+    fn as_ref(&self) -> &[u8] {
+        if let Some(ref heap) = self.heap {
+            &heap[..self.len as usize]
+        } else {
+            &self.inline[..self.len as usize]
+        }
+    }
+}
+
+pub(crate) struct LookupKey(InternalKey);
+
+impl LookupKey {
+    pub(crate) fn new(key: &[u8], seq_no: u64) -> Self {
+        Self(InternalKey::new(key, seq_no, OperationType::Put))
+    }
+}
+
+impl AsRef<[u8]> for LookupKey {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
 }
 
 #[cfg(test)]
