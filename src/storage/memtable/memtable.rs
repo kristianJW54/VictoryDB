@@ -169,10 +169,6 @@ pub(super) struct MemtableInner {
     lifecycle: AtomicU8,
     arena: Arena,
     skiplist: SkipList,
-    range_del_skiplist: SkipList,
-    // TODO: Future Optimisation -> add a SpanCache similar to Pebble
-    // TODO: Add RangeKey skiplist?
-    // TODO: Add RangeKeySpan ?
 }
 
 impl Display for MemtableInner {
@@ -203,7 +199,6 @@ impl MemtableInner {
             lifecycle: AtomicU8::new(MemLifeCycle::Active as u8),
             arena: arena,
             skiplist,
-            range_del_skiplist,
         }
     }
 
