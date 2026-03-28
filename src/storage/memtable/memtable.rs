@@ -170,6 +170,7 @@ pub(super) struct MemtableInner {
     arena: Arena,
     skiplist: SkipList,
     range_del_skiplist: SkipList,
+    // TODO: Future Optimisation -> add a SpanCache similar to Pebble
     // TODO: Add RangeKey skiplist?
     // TODO: Add RangeKeySpan ?
 }
