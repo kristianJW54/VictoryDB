@@ -458,11 +458,6 @@ impl SkipList {
                 // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
                 match self.comparator.compare(node_key, key) {
                     Ord::Less => {
-                        println!(
-                            "Comparing -> [{} | {}] -- Less",
-                            InternalKeyRef::from(node_key),
-                            InternalKeyRef::from(key)
-                        );
                         pred = curr;
                         curr = Node::load_next(pred, level, Ordering::Relaxed);
                     }
@@ -471,11 +466,6 @@ impl SkipList {
                         break;
                     }
                     Ord::Greater => {
-                        println!(
-                            "Comparing -> [{} | {}] -- Greater",
-                            InternalKeyRef::from(node_key),
-                            InternalKeyRef::from(key)
-                        );
                         break;
                     }
                 }

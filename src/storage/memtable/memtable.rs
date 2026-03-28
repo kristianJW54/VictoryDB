@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::storage::iterator::internal_iterator::InternalIterator;
@@ -165,13 +165,12 @@ pub(super) struct MemtableInner {
     id: MemID,
     highest_seqno: AtomicU64,
     size: AtomicU64,
+    requested_rotation: AtomicBool,
     lifecycle: AtomicU8,
-    // TODO: May want rotation request bool
     arena: Arena,
     skiplist: SkipList,
-    // TODO: Add RangeDel skiplist?
+    range_del_skiplist: SkipList,
     // TODO: Add RangeKey skiplist?
-    // TODO: Add RangeDelSpan ?
     // TODO: Add RangeKeySpan ?
 }
 
@@ -185,7 +184,6 @@ impl Display for MemtableInner {
     }
 }
 
-// TODO: Need to think about the operations and what they return (do we return value bytes? or something which can give us value bytes?)
 impl MemtableInner {
     fn new(
         id: MemID,
@@ -194,14 +192,17 @@ impl MemtableInner {
         comp: Arc<dyn Comparator>,
     ) -> Self {
         let arena = Arena::new(arena_size, allocator);
-        let skiplist = SkipList::new(comp, &arena);
+        let skiplist = SkipList::new(comp.clone(), &arena);
+        let range_del_skiplist = SkipList::new(comp.clone(), &arena);
         Self {
             id,
             highest_seqno: AtomicU64::new(0),
             size: AtomicU64::new(0),
+            requested_rotation: AtomicBool::new(false),
             lifecycle: AtomicU8::new(MemLifeCycle::Active as u8),
             arena: arena,
             skiplist,
+            range_del_skiplist,
         }
     }
 
