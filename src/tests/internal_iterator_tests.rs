@@ -38,10 +38,36 @@ mod tests {
         let mut int_iter = mem.iter();
 
         int_iter.seek_to_first();
-        println!(
-            "{}:{:?}",
-            InternalKeyRef::from(int_iter.key()),
-            String::from_utf8_lossy(int_iter.value())
+        assert_eq!(
+            int_iter.internal_key(),
+            InternalKeyRef::from(key_4.as_ref())
         );
+
+        // Now try next()
+
+        let assert = vec![
+            InternalKeyRef::from(key_4.as_ref()),
+            InternalKeyRef::from(key_3.as_ref()),
+            InternalKeyRef::from(key_2.as_ref()),
+            InternalKeyRef::from(key_1.as_ref()),
+        ];
+
+        assert_eq!(int_iter.internal_key(), assert[0]);
+
+        for i in 1..4 {
+            int_iter.next();
+            assert_eq!(int_iter.internal_key(), assert[i]);
+        }
+
+        // Now want to test seek()
+
+        let mut int_iter_2 = mem.iter();
+        let lk: InternalKeyRef = InternalKeyRef::from(&key_2);
+        int_iter_2.seek(LookupKey::new(lk.user_key, lk.seq_no).as_ref());
+        assert_eq!(int_iter_2.internal_key(), InternalKeyRef::from(&key_2));
+
+        // Seek to key and test look up key on higher seq_no
+        int_iter_2.seek(LookupKey::new(lk.user_key, 4).as_ref());
+        assert_eq!(int_iter_2.internal_key().op, OperationType::Delete as u8)
     }
 }

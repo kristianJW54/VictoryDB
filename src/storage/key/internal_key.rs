@@ -21,8 +21,8 @@ pub(crate) enum OperationType {
     // the seq_no be the comparisons decider
     Put = 1,
     Delete = 2,
-    Merge = 3,       // TODO: Implement Merge Operation into the system
-    RangeDelete = 4, // TODO: Implement RangeDelete Operation into the system
+    Merge = 3, // TODO: Implement Merge Operation into the system
+    Max = 255,
 }
 
 impl From<OperationType> for u64 {
@@ -37,7 +37,7 @@ impl From<u8> for OperationType {
             1 => OperationType::Put,
             2 => OperationType::Delete,
             3 => OperationType::Merge,
-            4 => OperationType::RangeDelete,
+            255 => OperationType::Max,
             _ => unreachable!(),
         }
     }
@@ -49,7 +49,7 @@ impl Display for OperationType {
             OperationType::Put => write!(f, "Put"),
             OperationType::Delete => write!(f, "Delete"),
             OperationType::Merge => write!(f, "Merge"),
-            OperationType::RangeDelete => write!(f, "RangeDelete"),
+            OperationType::Max => write!(f, "Max"),
         }
     }
 }
@@ -94,14 +94,15 @@ fn extract_op_raw(trailer: u64) -> u8 {
 }
 
 // TODO: Finish the internal key logic
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct InternalKeyRef<'a> {
     pub(crate) user_key: &'a [u8],
     pub(crate) seq_no: u64,
     pub(crate) op: u8,
 }
 
-impl<'a> InternalKeyRef<'a> {
-    pub(crate) fn from(key: &'a [u8]) -> Self {
+impl<'a> From<&'a [u8]> for InternalKeyRef<'a> {
+    fn from(key: &'a [u8]) -> Self {
         debug_assert!(key.len() >= 8, "InternalKey must include trailer");
 
         let (user_key, trailer_bytes) = key.split_at(key.len() - 8);
@@ -166,6 +167,12 @@ impl InternalKey {
     }
 }
 
+impl<'a> From<&'a InternalKey> for InternalKeyRef<'a> {
+    fn from(key: &'a InternalKey) -> Self {
+        InternalKeyRef::from(key.as_ref())
+    }
+}
+
 impl AsRef<[u8]> for InternalKey {
     fn as_ref(&self) -> &[u8] {
         if let Some(ref heap) = self.heap {
@@ -180,7 +187,7 @@ pub(crate) struct LookupKey(InternalKey);
 
 impl LookupKey {
     pub(crate) fn new(key: &[u8], seq_no: u64) -> Self {
-        Self(InternalKey::new(key, seq_no, OperationType::Put))
+        Self(InternalKey::new(key, seq_no, OperationType::Max))
     }
 }
 

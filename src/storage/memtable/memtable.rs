@@ -152,7 +152,6 @@ impl Memtable<Mutable> {
                 OperationType::Put => MemReturn::Value(v),
                 OperationType::Delete => MemReturn::Deleted,
                 OperationType::Merge => MemReturn::Merge,
-                OperationType::RangeDelete => MemReturn::Deleted,
                 _ => unreachable!(),
             }
         } else {
@@ -268,6 +267,12 @@ pub(crate) struct MemtableIterator<'a> {
     current: Option<NonNull<Node>>,
 }
 
+impl<'a> MemtableIterator<'a> {
+    pub(crate) fn internal_key(&self) -> InternalKeyRef<'_> {
+        InternalKeyRef::from(self.key())
+    }
+}
+
 impl<'a> InternalIterator for MemtableIterator<'a> {
     fn valid(&self) -> bool {
         self.current.is_some()
@@ -275,6 +280,21 @@ impl<'a> InternalIterator for MemtableIterator<'a> {
 
     fn seek_to_first(&mut self) {
         self.item = self.sl.iter();
+        self.current = self
+            .item
+            .next()
+            .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+    }
+
+    fn seek(&mut self, key: &[u8]) {
+        self.item = self.sl.seek(key);
+        self.current = self
+            .item
+            .next()
+            .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+    }
+
+    fn next(&mut self) {
         self.current = self
             .item
             .next()
