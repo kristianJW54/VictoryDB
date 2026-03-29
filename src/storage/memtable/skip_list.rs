@@ -682,14 +682,12 @@ impl SkipList {
     }
 
     pub(super) fn iter(&self) -> Iter<'_> {
-        Iter {
-            item: self.head.sentinel.as_ptr(),
-            _p: PhantomData,
-        }
+        let first = Node::load_next(self.head(), 0, Ordering::Relaxed);
+        Iter::new(first)
     }
 
     pub(super) fn seek(&self, key: &[u8]) -> Iter<'_> {
-        let mut ctx = self.search(key);
+        let ctx = self.search(key);
 
         if let Some(node) = ctx.searched_node {
             return Iter {
@@ -753,6 +751,7 @@ impl<'a> Iterator for Iter<'a> {
         }
 
         self.item = Node::load_next(node, 0, Ordering::Relaxed);
+
         Some(node)
     }
 }
@@ -1079,22 +1078,28 @@ mod tests {
         unsafe { skip.insert(b"Mango", b"Yellow", &arena) };
         unsafe { skip.insert(b"Pear", b"Brown", &arena) };
 
-        let mut keys: Vec<&[u8]> = Vec::with_capacity(4);
+        let mut keys: Vec<&[u8]> = Vec::with_capacity(3);
 
-        keys.push(b"");
         keys.push(b"Apple");
         keys.push(b"Mango");
         keys.push(b"Pear");
 
         for (i, n) in skip.iter().enumerate() {
-            assert_eq!(keys[i], Node::get_key_bytes(n))
+            assert_eq!(keys[i], Node::get_key_bytes(n));
         }
 
-        let expected_result_from_seek = vec![2, 3];
+        let expected_result_from_seek = vec![1, 2];
 
         for (i, n) in skip.seek(b"Berry").enumerate() {
             assert_eq!(keys[expected_result_from_seek[i]], Node::get_key_bytes(n))
         }
+
+        // Check next method
+        let mut iter = skip.iter();
+        assert_eq!(Node::get_key_bytes(iter.next().unwrap()), b"Apple");
+        assert_eq!(Node::get_key_bytes(iter.next().unwrap()), b"Mango");
+        assert_eq!(Node::get_key_bytes(iter.next().unwrap()), b"Pear");
+        assert!(iter.next().is_none());
     }
 
     #[test]

@@ -122,7 +122,7 @@ impl<'a> Display for InternalKeyRef<'a> {
         let key = String::from_utf8_lossy(self.user_key);
         write!(
             f,
-            "Key: {} SeqNo: {} Op: {}",
+            "{}-{}-{}",
             key,
             self.seq_no,
             OperationType::from(self.op)

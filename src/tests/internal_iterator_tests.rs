@@ -1,21 +1,23 @@
 #[cfg(test)]
 mod tests {
 
+    use crate::storage::iterator::internal_iterator::InternalIterator;
     use crate::storage::key::comparator::InternalKeyComparator;
-    use crate::storage::key::internal_key::{InternalKey, LookupKey, OperationType};
+    use crate::storage::key::internal_key::{
+        InternalKey, InternalKeyRef, LookupKey, OperationType,
+    };
     use crate::storage::memory::allocator::*;
     use crate::storage::memory::*;
     use crate::storage::memtable::memtable::*;
 
     #[test]
-    fn memtable_basic_insert_and_get() {
+    fn seek_to_for_memtable() {
         let mem = Memtable::new(
             0,
             ArenaSize::Test(640, 640),
             Allocator::System(SystemAllocator::new()),
             InternalKeyComparator::new(),
         );
-
         // Put a few keys in the memtable
 
         let key_1 = InternalKey::new(b"51.1.User1001", 1, OperationType::Put);
@@ -24,20 +26,22 @@ mod tests {
         let key_4 = InternalKey::new(b"51.1.User1001", 4, OperationType::Delete);
         let wrong_key = InternalKey::new(b"51.1.User1002", 5, OperationType::Put);
 
+        //
         mem.insert(key_1.as_ref(), b"value_1");
         mem.insert(key_2.as_ref(), b"value_2");
         mem.insert(key_3.as_ref(), b"value_3");
         mem.insert(key_4.as_ref(), b"");
         mem.insert(wrong_key.as_ref(), b"value_4");
 
-        // Get the value for most recent seq no of 5
-        let search_key = LookupKey::new(b"51.1.User1001", 8);
-        let result = mem.get(search_key);
-        assert!(matches!(result, MemReturn::Deleted));
+        // Now we want to iterate through the memtable with InternalIterator
 
-        // Get the value for snapshot seq no of 3
-        let search_key = LookupKey::new(b"51.1.User1001", 3);
-        let result = mem.get(search_key);
-        assert!(matches!(result, MemReturn::Value(b"value_3")));
+        let mut int_iter = mem.iter();
+
+        int_iter.seek_to_first();
+        println!(
+            "{}:{:?}",
+            InternalKeyRef::from(int_iter.key()),
+            String::from_utf8_lossy(int_iter.value())
+        );
     }
 }

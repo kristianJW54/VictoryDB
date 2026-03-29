@@ -159,6 +159,10 @@ impl Memtable<Mutable> {
             MemReturn::NotFound
         }
     }
+
+    pub(crate) fn iter(&self) -> MemtableIterator<'_> {
+        self.inner.iter()
+    }
 }
 
 pub(super) struct MemtableInner {
@@ -243,7 +247,7 @@ impl MemtableInner {
 
     fn iter(&self) -> MemtableIterator<'_> {
         MemtableIterator {
-            head: self.skiplist.head(),
+            sl: &self.skiplist,
             item: self.skiplist.iter(),
             current: None,
         }
@@ -251,7 +255,7 @@ impl MemtableInner {
 
     fn iter_from(&self, key: &[u8]) -> MemtableIterator<'_> {
         MemtableIterator {
-            head: self.skiplist.head(),
+            sl: &self.skiplist,
             item: self.skiplist.seek(key),
             current: None,
         }
@@ -259,18 +263,32 @@ impl MemtableInner {
 }
 
 pub(crate) struct MemtableIterator<'a> {
-    head: *mut Node,
+    sl: &'a SkipList,
     item: Iter<'a>,
     current: Option<NonNull<Node>>,
 }
 
 impl<'a> InternalIterator for MemtableIterator<'a> {
+    fn valid(&self) -> bool {
+        self.current.is_some()
+    }
+
     fn seek_to_first(&mut self) {
-        self.item = Iter::new(self.head);
+        self.item = self.sl.iter();
         self.current = self
             .item
             .next()
             .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+    }
+
+    fn key(&self) -> &[u8] {
+        debug_assert!(self.valid());
+        Node::get_key_bytes(self.current.unwrap().as_ptr())
+    }
+
+    fn value(&self) -> &[u8] {
+        debug_assert!(self.valid());
+        Node::get_value_bytes(self.current.unwrap().as_ptr())
     }
 }
 
