@@ -1,4 +1,4 @@
-use crate::storage::memtable::memtable::{Immutable, Memtable, Mutable};
+use crate::storage::memtable::memtable::{Flushed, Immutable, Memtable, Mutable};
 use std::{ptr::NonNull, sync::Arc};
 
 //------------------
@@ -8,7 +8,9 @@ use std::{ptr::NonNull, sync::Arc};
 //
 // MemtableList holds the immutable state and logic for Immutable Memtables
 pub(crate) struct MemTableList {
-    immutable_memtables: Vec<Memtable<Immutable>>,
+    imm: Vec<Arc<Memtable<Immutable>>>,
+    current_version: Arc<MemListVersion>,
+    flushed: Vec<Arc<Memtable<Flushed>>>,
     // TOOD: Need to add Flushed List
 }
 
@@ -16,5 +18,5 @@ pub(crate) struct MemTableList {
 // We centralise the memtable registry access for a particular point in time to give to a database snapshot which will allow readers to
 // access memtables without blocking or seeing conflicting states
 pub(crate) struct MemListVersion {
-    imm_list: Vec<Arc<Memtable<Immutable>>>, // NOTE: Do we need Arc here?
+    imm_version_list: Vec<Arc<Memtable<Immutable>>>,
 }

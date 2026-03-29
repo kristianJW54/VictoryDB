@@ -11,7 +11,7 @@ mod tests {
     fn memtable_basic_insert_and_get() {
         let mem = Memtable::new(
             0,
-            ArenaSize::Test(640, 640),
+            ArenaSize::Custom(640, 640),
             Allocator::System(SystemAllocator::new()),
             InternalKeyComparator::new(),
         );
@@ -39,5 +39,11 @@ mod tests {
         let search_key = LookupKey::new(b"51.1.User1001", 3);
         let result = mem.get(search_key);
         assert!(matches!(result, MemReturn::Value(b"value_3")));
+    }
+
+    #[test]
+    fn memtable_memory_usage() {
+
+        // Test filling up a memtable and checking chunk usage is working
     }
 }

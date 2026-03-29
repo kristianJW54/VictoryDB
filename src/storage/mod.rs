@@ -1,3 +1,4 @@
+pub(crate) mod column_family;
 pub(crate) mod db;
 pub(crate) mod iterator;
 pub(crate) mod key;

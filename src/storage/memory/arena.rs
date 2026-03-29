@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn arena_sizing() {
         let arena = Arena::new(
-            ArenaSize::Test(10, 20),
+            ArenaSize::Custom(10, 20),
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn alignment_bitwise() {
         let arena = Arena::new(
-            ArenaSize::Test(10, 20),
+            ArenaSize::Custom(10, 20),
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn chunk_change() {
         let arena = Arena::new(
-            ArenaSize::Test(10, 20),
+            ArenaSize::Custom(10, 20),
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn tower_and_bytes() {
         let arena = Arena::new(
-            ArenaSize::Test(20, 20),
+            ArenaSize::Custom(20, 20),
             Allocator::System(SystemAllocator::new()),
         );
 

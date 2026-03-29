@@ -21,7 +21,7 @@ const MEDIUM_ARENA_BLOCK_SIZE: usize = 4 * MB;
 const SMALL_ARENA_BLOCK_SIZE: usize = 1 * MB;
 
 pub(crate) enum ArenaSize {
-    Test(usize, usize),
+    Custom(usize, usize),
     Default,
     Small,
     Medium,
@@ -31,7 +31,7 @@ pub(crate) enum ArenaSize {
 impl ArenaSize {
     pub fn to_policy(self) -> ArenaPolicy {
         match self {
-            ArenaSize::Test(block, cap) => ArenaPolicy {
+            ArenaSize::Custom(block, cap) => ArenaPolicy {
                 block_size: block,
                 cap: cap,
             },
