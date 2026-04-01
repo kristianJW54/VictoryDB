@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::{cell::Cell, num::Wrapping, sync::atomic::AtomicU64};
 
 pub(crate) mod guard;
+pub(crate) mod scratch;
 
 /*
 
