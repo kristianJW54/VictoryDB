@@ -1,9 +1,10 @@
 pub(crate) mod column_family;
 pub(crate) mod db;
-pub(crate) mod epoch;
+pub(crate) mod ebr;
 pub(crate) mod iterator;
 pub(crate) mod key;
 pub(crate) mod memory;
 pub(crate) mod memtable;
 pub(crate) mod range;
+pub(crate) mod thread_ctx;
 pub(crate) mod versioning;
