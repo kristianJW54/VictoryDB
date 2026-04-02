@@ -1,3 +1,4 @@
+pub(crate) mod registry;
 pub(crate) mod scratch;
 
 use crate::storage::ebr::global::collector;
@@ -20,6 +21,7 @@ struct ThreadContext {
  */
 
 // TODO: Create thread_ctx and use it to store Local ebr participant and also cached super version pointer
+// We can also use internal key scratch buffers for building lookup keys and internal keys for memtable insertions
 
 thread_local! {
     static LOCAL: LocalHandle = collector().register()

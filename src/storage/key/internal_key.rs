@@ -11,6 +11,8 @@
 
 use std::fmt::Display;
 
+use crate::storage::key::{INITIAL_KEY_BUFFER_CAP, MAX_BUFFER_RETAINED};
+
 const INLINE_IK_SIZE: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,6 +132,33 @@ impl<'a> Display for InternalKeyRef<'a> {
         )
     }
 }
+
+//--------------------- Moving Internal Key handling to TLS Buffer -------------------------------//
+
+pub(crate) struct InternalKeyBuffer {
+    buffer: Vec<u8>,
+}
+
+impl InternalKeyBuffer {
+    pub(crate) fn new() -> Self {
+        Self {
+            buffer: Vec::with_capacity(INITIAL_KEY_BUFFER_CAP),
+        }
+    }
+
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
+        let needed = bytes.len();
+
+        if self.buffer.capacity() > MAX_BUFFER_RETAINED && needed < MAX_BUFFER_RETAINED {
+            self.buffer.shrink_to(INITIAL_KEY_BUFFER_CAP);
+        }
+
+        self.buffer.clear();
+        self.buffer.extend_from_slice(bytes);
+    }
+}
+
+//--------------------- Moving Internal Key handling to TLS Buffer -------------------------------//
 
 //
 // LookupKey is a temporary struct used for internal key operations. Mainly on read and search operations but the LookupKey can
