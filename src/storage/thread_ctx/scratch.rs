@@ -48,6 +48,8 @@ impl Local {
     }
 }
 
+// NOTE: We need local handle because global must point to the same local object within TLS so local changes are reflected in global states storage
+// Implementing
 #[derive(Clone)]
 struct LocalHandle {
     local: *const Local,

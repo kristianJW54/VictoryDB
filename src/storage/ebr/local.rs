@@ -44,6 +44,14 @@ pub(crate) struct LocalHandle {
 unsafe impl Send for LocalHandle {}
 unsafe impl Sync for LocalHandle {}
 
+impl LocalHandle {
+    pub(crate) fn new(collector: &Collector) -> Self {
+        Self {
+            local: Local::register(collector).local,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 #[repr(align(64))]
 struct CachePadded<T> {

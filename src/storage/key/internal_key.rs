@@ -9,9 +9,10 @@
 
 //
 
+use std::cell::UnsafeCell;
 use std::fmt::Display;
 
-use crate::storage::key::{INITIAL_KEY_BUFFER_CAP, MAX_BUFFER_RETAINED};
+use crate::storage::key::{INITIAL_KEY_BUFFER_CAP, MAX_BUFFER_RETAINED, MAX_KEY_SIZE};
 
 const INLINE_IK_SIZE: usize = 20;
 
@@ -136,25 +137,101 @@ impl<'a> Display for InternalKeyRef<'a> {
 //--------------------- Moving Internal Key handling to TLS Buffer -------------------------------//
 
 pub(crate) struct InternalKeyBuffer {
-    buffer: Vec<u8>,
+    buffer: UnsafeCell<Vec<u8>>,
 }
 
 impl InternalKeyBuffer {
     pub(crate) fn new() -> Self {
         Self {
-            buffer: Vec::with_capacity(INITIAL_KEY_BUFFER_CAP),
+            buffer: UnsafeCell::new(Vec::with_capacity(INITIAL_KEY_BUFFER_CAP)),
         }
     }
 
-    pub(crate) fn push(&mut self, bytes: &[u8]) {
-        let needed = bytes.len();
+    pub(crate) fn with_inner_key<F, R>(
+        &self,
+        user_key: &[u8],
+        seq_no: u64,
+        op: OperationType,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let u_len = user_key.len();
+        let total = u_len + 8;
+        let trailer = encode_trailer(seq_no, op);
 
-        if self.buffer.capacity() > MAX_BUFFER_RETAINED && needed < MAX_BUFFER_RETAINED {
-            self.buffer.shrink_to(INITIAL_KEY_BUFFER_CAP);
+        debug_assert!(total <= MAX_KEY_SIZE);
+
+        // Fast inline path
+        if u_len + 8 <= INLINE_IK_SIZE {
+            let mut buf = [0u8; INLINE_IK_SIZE];
+            buf[..u_len].copy_from_slice(user_key);
+            buf[u_len..total].copy_from_slice(&trailer);
+            return f(&buf[..total]);
         }
 
-        self.buffer.clear();
-        self.buffer.extend_from_slice(bytes);
+        // Else slow path - use scratch buffer
+        let buf = unsafe { &mut *self.buffer.get() };
+        debug_assert!(buf.len() >= total);
+
+        if buf.capacity() > MAX_BUFFER_RETAINED && total < MAX_BUFFER_RETAINED {
+            buf.shrink_to(INITIAL_KEY_BUFFER_CAP);
+        }
+
+        buf.clear();
+
+        if buf.capacity() < total {
+            buf.reserve(total - buf.capacity());
+        }
+        buf.extend_from_slice(user_key);
+        buf.extend_from_slice(&trailer);
+        return f(&buf[..total]);
+    }
+}
+
+// InnerKey is a temporary struct used only for taking user keys and producing either lookup keys or internal keys where we need to build slices
+// using either the stack or backing TLS buffer. We do not own either, and both stack and TLS buffer are not owned by the caller so we cannot safely
+// return references to them and so InnerKey holds no bytes and it's methods use closures
+pub(crate) struct InnerKey;
+
+impl InnerKey {
+    const INLINE_IK_SIZE: usize = 64;
+
+    pub(crate) fn new() -> Self {
+        Self
+    }
+
+    pub(crate) fn with_inner_key<F, R>(
+        &self,
+        scratch_buffer: &mut [u8],
+        user_key: &[u8],
+        seq_no: u64,
+        op_type: OperationType,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let u_len = user_key.len();
+        let total = u_len + 8;
+        let trailer = encode_trailer(seq_no, op_type);
+        debug_assert!(total <= MAX_KEY_SIZE);
+
+        // Fast inline path
+        if u_len + 8 <= INLINE_IK_SIZE {
+            let mut buf = [0u8; INLINE_IK_SIZE];
+            buf[..u_len].copy_from_slice(user_key);
+            buf[u_len..total].copy_from_slice(&trailer);
+            return f(&buf[..total]);
+        }
+
+        // Else slow path - use scratch buffer
+        debug_assert!(scratch_buffer.len() >= total);
+
+        scratch_buffer[..u_len].copy_from_slice(user_key);
+        scratch_buffer[u_len..total].copy_from_slice(&trailer);
+        return f(&scratch_buffer[..total]);
     }
 }
 
@@ -228,6 +305,8 @@ impl AsRef<[u8]> for LookupKey {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::thread_ctx::TCTX;
+
     use super::*;
 
     #[test]
@@ -239,5 +318,29 @@ mod tests {
             trailer_2 > trailer_1,
             "trailer_2 should be greater than trailer_1"
         );
+    }
+
+    #[test]
+    fn inner_key() {
+        let mut user_key = Vec::new();
+        user_key.extend_from_slice(b"Hello".as_slice());
+
+        // TLS Approach
+        TCTX.with(|v| {
+            // In here we would then take a reference to scratch
+            //
+
+            v.inner_key_buf()
+                .with_inner_key(&user_key, 10, OperationType::Put, |byte| {
+                    println!("{}", InternalKeyRef::from(byte))
+                })
+        });
+
+        // Normal Approach
+        let inner_key = InternalKeyBuffer::new();
+
+        inner_key.with_inner_key(&user_key, 10, OperationType::Put, |byte| {
+            println!("{}", InternalKeyRef::from(byte))
+        })
     }
 }
