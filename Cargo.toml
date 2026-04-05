@@ -1,11 +1,11 @@
-[package]
-name = "VictoryDB"
+[workspace]
+members = [
+    "crates/engine",
+
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-
-[features]
-default = ["arena_direct"]
-arena_direct = []
-buffered_key_writer = []
+[workspace.dependencies]

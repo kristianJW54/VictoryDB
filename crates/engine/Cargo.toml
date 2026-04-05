@@ -1,0 +1,11 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[features]
+default = ["arena_direct"]
+arena_direct = []
+buffered_key_writer = []
