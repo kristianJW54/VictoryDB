@@ -6,23 +6,23 @@
 
 use crate::ebr::global::collector;
 use crate::ebr::local::LocalHandle;
-use crate::key::internal_key::InternalKeyBuffer;
+use crate::key::internal_key::Ephemeral_Buffer;
 
 pub(crate) struct ThreadCtx {
     ebr: LocalHandle,
     // NOTE: Add super version cache
-    key_buffer: InternalKeyBuffer,
+    key_buffer: Ephemeral_Buffer,
 }
 
 impl ThreadCtx {
     pub(crate) fn new() -> Self {
         Self {
             ebr: collector().register(),
-            key_buffer: InternalKeyBuffer::new(),
+            key_buffer: Ephemeral_Buffer::new(),
         }
     }
 
-    pub(crate) fn inner_key_buf(&self) -> &InternalKeyBuffer {
+    pub(crate) fn inner_key_buf(&self) -> &Ephemeral_Buffer {
         &self.key_buffer
     }
 }
