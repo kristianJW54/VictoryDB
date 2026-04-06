@@ -6,7 +6,7 @@
 //
 //
 
-use crate::storage::ebr::global::Collector;
+use crate::ebr::global::Collector;
 
 use std::ops::Deref;
 use std::{cell::Cell, num::Wrapping, sync::atomic::AtomicU64};

@@ -11,8 +11,10 @@
 
 use std::cell::UnsafeCell;
 use std::fmt::Display;
+use std::time::Instant;
 
-use crate::storage::key::{INITIAL_KEY_BUFFER_CAP, MAX_BUFFER_RETAINED, MAX_KEY_SIZE};
+use crate::key::inner_key::{ITER_INLINE, InnerKey, LOOKUP_INLINE};
+use crate::key::{INITIAL_KEY_BUFFER_CAP, MAX_BUFFER_RETAINED, MAX_KEY_SIZE, encode_into};
 
 const INLINE_IK_SIZE: usize = 20;
 
@@ -102,6 +104,7 @@ pub(crate) struct InternalKeyRef<'a> {
     pub(crate) user_key: &'a [u8],
     pub(crate) seq_no: u64,
     pub(crate) op: u8,
+    // NOTE: Add Trailer instead for lazy decoding
 }
 
 impl<'a> From<&'a [u8]> for InternalKeyRef<'a> {
@@ -135,6 +138,47 @@ impl<'a> Display for InternalKeyRef<'a> {
 }
 
 //--------------------- Moving Internal Key handling to TLS Buffer -------------------------------//
+
+// EphemeralKey
+
+pub(crate) struct EphemeralKey<const N: usize> {
+    _inner: InnerKey<N>,
+}
+
+impl<const N: usize> EphemeralKey<N> {
+    pub(crate) fn new() -> Self {
+        Self {
+            _inner: InnerKey::new(),
+        }
+    }
+
+    pub(crate) fn with_ephemeral_key<F, R>(
+        &mut self,
+        user_key: &[u8],
+        seq_no: u64,
+        op_type: OperationType,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let total = user_key.len() + 8;
+
+        // Check if inlining or using TLS
+
+        if total <= N {
+            // Now encode the bytes into _inner
+            self._inner.encode_inline(user_key, seq_no, op_type);
+            return f(self._inner.as_slice());
+        }
+
+        // TODO: Finish from here
+
+        //
+        //
+        todo!()
+    }
+}
 
 pub(crate) struct InternalKeyBuffer {
     buffer: UnsafeCell<Vec<u8>>,
@@ -187,51 +231,6 @@ impl InternalKeyBuffer {
         buf.extend_from_slice(user_key);
         buf.extend_from_slice(&trailer);
         return f(&buf[..total]);
-    }
-}
-
-// InnerKey is a temporary struct used only for taking user keys and producing either lookup keys or internal keys where we need to build slices
-// using either the stack or backing TLS buffer. We do not own either, and both stack and TLS buffer are not owned by the caller so we cannot safely
-// return references to them and so InnerKey holds no bytes and it's methods use closures
-pub(crate) struct InnerKey;
-
-impl InnerKey {
-    const INLINE_IK_SIZE: usize = 64;
-
-    pub(crate) fn new() -> Self {
-        Self
-    }
-
-    pub(crate) fn with_inner_key<F, R>(
-        &self,
-        scratch_buffer: &mut [u8],
-        user_key: &[u8],
-        seq_no: u64,
-        op_type: OperationType,
-        f: F,
-    ) -> R
-    where
-        F: FnOnce(&[u8]) -> R,
-    {
-        let u_len = user_key.len();
-        let total = u_len + 8;
-        let trailer = encode_trailer(seq_no, op_type);
-        debug_assert!(total <= MAX_KEY_SIZE);
-
-        // Fast inline path
-        if u_len + 8 <= INLINE_IK_SIZE {
-            let mut buf = [0u8; INLINE_IK_SIZE];
-            buf[..u_len].copy_from_slice(user_key);
-            buf[u_len..total].copy_from_slice(&trailer);
-            return f(&buf[..total]);
-        }
-
-        // Else slow path - use scratch buffer
-        debug_assert!(scratch_buffer.len() >= total);
-
-        scratch_buffer[..u_len].copy_from_slice(user_key);
-        scratch_buffer[u_len..total].copy_from_slice(&trailer);
-        return f(&scratch_buffer[..total]);
     }
 }
 
@@ -305,7 +304,7 @@ impl AsRef<[u8]> for LookupKey {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::thread_ctx::TCTX;
+    use crate::thread_ctx::TCTX;
 
     use super::*;
 

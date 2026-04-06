@@ -1,14 +1,12 @@
 #[cfg(test)]
 mod tests {
 
-    use crate::storage::iterator::internal_iterator::InternalIterator;
-    use crate::storage::key::comparator::InternalKeyComparator;
-    use crate::storage::key::internal_key::{
-        InternalKey, InternalKeyRef, LookupKey, OperationType,
-    };
-    use crate::storage::memory::allocator::*;
-    use crate::storage::memory::*;
-    use crate::storage::memtable::memtable::*;
+    use crate::iterator::internal_iterator::InternalIterator;
+    use crate::key::comparator::InternalKeyComparator;
+    use crate::key::internal_key::{InternalKey, InternalKeyRef, LookupKey, OperationType};
+    use crate::memory::allocator::*;
+    use crate::memory::*;
+    use crate::memtable::memtable::*;
 
     #[test]
     fn seek_to_for_memtable() {

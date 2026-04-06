@@ -1,4 +1,4 @@
-use crate::storage::memtable::memtable::{Flushed, Immutable, Memtable, Mutable};
+use crate::memtable::memtable::{Flushed, Immutable, Memtable, Mutable};
 use std::{ptr::NonNull, sync::Arc};
 
 //------------------

@@ -15,7 +15,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-use crate::storage::memory::LARGE_ARENA_BLOCK_SIZE;
+use crate::memory::LARGE_ARENA_BLOCK_SIZE;
 
 // Arean Allocator must only allocate one arena at a time and give ownership of that memory to an arena
 

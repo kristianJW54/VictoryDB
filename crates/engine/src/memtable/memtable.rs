@@ -8,15 +8,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicU16};
 
-use crate::storage::iterator::internal_iterator::InternalIterator;
-use crate::storage::key::comparator::Comparator;
-use crate::storage::key::internal_key::{
+use crate::iterator::internal_iterator::InternalIterator;
+use crate::key::comparator::Comparator;
+use crate::key::internal_key::{
     InternalKey, InternalKeyRef, LookupKey, OperationType, encode_trailer,
 };
-use crate::storage::memory::ArenaSize;
-use crate::storage::memory::allocator::Allocator;
-use crate::storage::memory::arena::Arena;
-use crate::storage::memtable::skip_list::{Iter, Node, SkipList};
+use crate::memory::ArenaSize;
+use crate::memory::allocator::Allocator;
+use crate::memory::arena::Arena;
+use crate::memtable::skip_list::{Iter, Node, SkipList};
 
 pub(crate) type MemID = u64;
 

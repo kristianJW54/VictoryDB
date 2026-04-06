@@ -4,7 +4,7 @@
 //
 use std::sync::Arc;
 
-use crate::storage::{
+use crate::{
     memtable::memtable::{Memtable, Mutable},
     versioning::{memtable_list::MemTableList, superversion::Superversion},
 };

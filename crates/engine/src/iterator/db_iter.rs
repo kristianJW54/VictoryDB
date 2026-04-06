@@ -16,7 +16,7 @@
 
 use std::marker::PhantomData;
 
-use crate::storage::{iterator::iter_alloc::IterAlloc, memory::arena::Arena};
+use crate::{iterator::iter_alloc::IterAlloc, memory::arena::Arena};
 
 pub(crate) trait IterAllocStrategy {}
 

@@ -24,8 +24,8 @@ use std::sync::{
     atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
-use crate::storage::memory::allocator::Allocator;
-use crate::storage::memory::{ArenaPolicy, ArenaSize};
+use crate::memory::allocator::Allocator;
+use crate::memory::{ArenaPolicy, ArenaSize};
 
 #[derive(Debug)]
 pub(crate) enum ArenaError {
@@ -225,7 +225,7 @@ impl Arena {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::memory::allocator::{Allocator, SystemAllocator};
+    use crate::memory::allocator::{Allocator, SystemAllocator};
 
     use super::*;
     use std::thread::{self};

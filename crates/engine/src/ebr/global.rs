@@ -5,7 +5,7 @@
 //
 //
 //
-use crate::storage::ebr::local::{Local, LocalHandle};
+use crate::ebr::local::{Local, LocalHandle};
 
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;

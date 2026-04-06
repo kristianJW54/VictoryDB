@@ -31,9 +31,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{alloc::Layout, sync::atomic::AtomicPtr};
 use std::{panic, slice};
 
-use crate::storage::key::comparator::{Comparator, DefaultComparator};
-use crate::storage::key::internal_key::InternalKeyRef;
-use crate::storage::memory::arena::{Arena, ArenaError};
+use crate::key::comparator::{Comparator, DefaultComparator};
+use crate::key::internal_key::InternalKeyRef;
+use crate::memory::arena::{Arena, ArenaError};
 
 // ------------------------------------------------------
 
@@ -49,8 +49,8 @@ impl From<std::alloc::LayoutError> for SkipListError {
     }
 }
 
-impl From<crate::storage::memory::arena::ArenaError> for SkipListError {
-    fn from(err: crate::storage::memory::arena::ArenaError) -> Self {
+impl From<crate::memory::arena::ArenaError> for SkipListError {
+    fn from(err: crate::memory::arena::ArenaError) -> Self {
         SkipListError::Arena(err)
     }
 }
@@ -789,7 +789,7 @@ impl<'a> Iterator for RangeIter<'a> {
 #[cfg(test)]
 mod tests {
 
-    use crate::storage::memory::{
+    use crate::memory::{
         ArenaSize,
         allocator::{Allocator, SystemAllocator},
     };

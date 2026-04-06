@@ -4,9 +4,9 @@
 //
 //
 
-use crate::storage::ebr::global::collector;
-use crate::storage::ebr::local::LocalHandle;
-use crate::storage::key::internal_key::InternalKeyBuffer;
+use crate::ebr::global::collector;
+use crate::ebr::local::LocalHandle;
+use crate::key::internal_key::InternalKeyBuffer;
 
 pub(crate) struct ThreadCtx {
     ebr: LocalHandle,
