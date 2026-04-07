@@ -12,6 +12,8 @@ pub(crate) struct ThreadCtx {
     ebr: LocalHandle,
     // NOTE: Add super version cache
     key_buffer: Ephemeral_Buffer,
+    // NOTE: Add PerfContext/Metrics
+    // NOTE: Add IOContext/Metrics
 }
 
 impl ThreadCtx {
