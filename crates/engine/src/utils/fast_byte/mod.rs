@@ -6,4 +6,5 @@
 //
 //
 
+// Inline SSO optimisation
 const FAST_BYTE: usize = 20;

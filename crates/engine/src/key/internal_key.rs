@@ -11,6 +11,8 @@
 
 use std::cell::UnsafeCell;
 use std::fmt::Display;
+use std::ops::Deref;
+use std::ptr::NonNull;
 
 use crate::key::inner_key::{ITER_INLINE, InnerKey, LOOKUP_INLINE};
 use crate::key::{INITIAL_KEY_BUFFER_CAP, MAX_BUFFER_RETAINED, MAX_KEY_SIZE, encode_into};
@@ -155,18 +157,29 @@ impl<const N: usize> LookUpKey<N> {
         debug_assert!(total <= MAX_KEY_SIZE);
 
         if total <= N {
+            let mut inner = InnerKey::new();
+            inner.encode_inline(user_key, seq_no, op);
             return Self {
-                _inner: InnerKey::new(),
+                _inner: inner,
                 buffer: None,
             };
         }
-
-        // TODO: Need to allocate the key
-        todo!()
+        // Allocate the key
+        let mut buffer = Vec::with_capacity(total);
+        buffer.extend_from_slice(user_key);
+        buffer.extend_from_slice(&encode_trailer(seq_no, op));
+        let mut inner = InnerKey::new();
+        inner.set_external(total, buffer.as_mut_ptr());
+        return Self {
+            _inner: inner,
+            buffer: Some(buffer.into_boxed_slice()),
+        };
     }
+}
 
-    pub(crate) fn is_inlined(&self) -> bool {
-        self._inner.is_inlined()
+impl<const N: usize> AsRef<[u8]> for LookUpKey<N> {
+    fn as_ref(&self) -> &[u8] {
+        self._inner.as_slice()
     }
 }
 
@@ -178,14 +191,12 @@ pub(crate) struct EphemeralKey<const N: usize> {
 }
 
 impl<const N: usize> EphemeralKey<N> {
+    // TODO: Decide if we need this because we should not be able to create instances of EphemeralKey as it should be short lived within
+    // a closure
     pub(crate) fn new() -> Self {
         Self {
             _inner: InnerKey::new(),
         }
-    }
-
-    pub(crate) fn is_inlined(&self) -> bool {
-        self._inner.is_inlined()
     }
 
     pub(crate) fn with_ephemeral_key<F, R>(
@@ -211,6 +222,8 @@ impl<const N: usize> EphemeralKey<N> {
         }
 
         // Use TLS buffer as fallback
+        self._inner
+            .set_external(total, unsafe { NonNull::dangling().as_mut() });
         TCTX.with(|ctx| {
             ctx.inner_key_buf()
                 .with_inner_key(user_key, seq_no, op_type, f)
@@ -259,74 +272,6 @@ impl Ephemeral_Buffer {
         buf.extend_from_slice(user_key);
         buf.extend_from_slice(&trailer);
         return f(&buf[..total]);
-    }
-}
-
-//--------------------- Moving Internal Key handling to TLS Buffer -------------------------------//
-
-//
-// LookupKey is a temporary struct used for internal key operations. Mainly on read and search operations but the LookupKey can
-// also be used by the writer on the write path if Arena Direct is not selected. This way a temp scratch buffer or inline key will be created on
-// write operations also.
-#[repr(C)]
-pub(crate) struct InternalKey {
-    len: u32,
-    inline: [u8; INLINE_IK_SIZE],
-    heap: Option<Box<[u8]>>,
-}
-
-impl InternalKey {
-    pub(crate) fn new(key: &[u8], seq_no: u64, op_type: OperationType) -> Self {
-        let trailer = encode_trailer(seq_no, op_type);
-        let len_key = key.len() + 8;
-
-        let mut this = Self {
-            len: len_key as u32,
-            inline: [0u8; INLINE_IK_SIZE],
-            heap: None,
-        };
-
-        if len_key <= INLINE_IK_SIZE {
-            this.inline[..key.len()].copy_from_slice(key);
-            this.inline[key.len()..].copy_from_slice(&trailer);
-        } else {
-            let mut buf = vec![0u8; len_key].into_boxed_slice();
-            buf[..key.len()].copy_from_slice(key);
-            buf[key.len()..].copy_from_slice(&trailer);
-            this.heap = Some(buf);
-        }
-
-        this
-    }
-}
-
-impl<'a> From<&'a InternalKey> for InternalKeyRef<'a> {
-    fn from(key: &'a InternalKey) -> Self {
-        InternalKeyRef::from(key.as_ref())
-    }
-}
-
-impl AsRef<[u8]> for InternalKey {
-    fn as_ref(&self) -> &[u8] {
-        if let Some(ref heap) = self.heap {
-            &heap[..self.len as usize]
-        } else {
-            &self.inline[..self.len as usize]
-        }
-    }
-}
-
-pub(crate) struct LookupKey(InternalKey);
-
-impl LookupKey {
-    pub(crate) fn new(key: &[u8], seq_no: u64) -> Self {
-        Self(InternalKey::new(key, seq_no, OperationType::Max))
-    }
-}
-
-impl AsRef<[u8]> for LookupKey {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
     }
 }
 
@@ -392,8 +337,6 @@ mod tests {
 
         assert_eq!(tls_result.len(), user_key.len() + 8);
         assert_eq!(inline_result.len(), inline_key.len() + 8);
-        assert!(ek.is_inlined() == false);
-        assert!(ek_2.is_inlined() == true);
     }
 
     #[test]
@@ -403,6 +346,30 @@ mod tests {
         let op_type = OperationType::Put;
 
         let lookup_key: LookUpInternalKey = LookUpKey::new(&user_key, seq_no, op_type);
-        println!("Layout -> {:?}", std::mem::size_of::<LookupKey>());
+        assert_eq!(std::mem::size_of::<LookUpKey<LOOKUP_INLINE>>(), 40);
+    }
+
+    #[test]
+    fn LookUpKey_works() {
+        //
+        let user_key = "ReallyLongKeyWhichShouldActuallyHeapAllocateBecauseItIsLongerThan200BytesIHopeThatNobodyAbsolutelyAnihiliatesMyDatabaseWithTheseBecauseThatsNotVeryNiceAndItMakesMeHaveToWorkHardOnMemoryAndMyBrainStrugglesWithMemoryAlready".to_string().into_bytes();
+        let inline_key = "User".to_string().into_bytes();
+        let seq_no = 12345 as u64;
+        let op_type = OperationType::Put;
+
+        let lk: LookUpInternalKey = LookUpKey::new(&user_key, seq_no, op_type);
+        let lk_inline: LookUpInternalKey = LookUpKey::new(&inline_key, seq_no, op_type);
+
+        // Test we get back what we want
+
+        let ik = InternalKeyRef::from(lk_inline.as_ref());
+        assert_eq!(ik.user_key, inline_key.as_slice());
+        assert_eq!(ik.seq_no, seq_no);
+        assert_eq!(ik.op, op_type as u8);
+
+        let ik_external = InternalKeyRef::from(lk.as_ref());
+        assert_eq!(ik_external.user_key, user_key.as_slice());
+        assert_eq!(ik_external.seq_no, seq_no);
+        assert_eq!(ik_external.op, op_type as u8);
     }
 }

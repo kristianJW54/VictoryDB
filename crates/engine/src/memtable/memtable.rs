@@ -10,9 +10,7 @@ use std::sync::atomic::{AtomicU8, AtomicU16};
 
 use crate::iterator::internal_iterator::InternalIterator;
 use crate::key::comparator::Comparator;
-use crate::key::internal_key::{
-    InternalKey, InternalKeyRef, LookupKey, OperationType, encode_trailer,
-};
+use crate::key::internal_key::{InternalKeyRef, OperationType, encode_trailer};
 use crate::memory::ArenaSize;
 use crate::memory::allocator::Allocator;
 use crate::memory::arena::Arena;
@@ -139,8 +137,9 @@ impl Memtable<Mutable> {
         self.inner.insert(key, value)
     }
 
-    pub(crate) fn get(&self, key: LookupKey) -> MemReturn<'_> {
-        if let Some((skip_key, v)) = self.inner.first_ge(key.as_ref()) {
+    // TODO: Do we want the Value(v) to include the key and value?
+    pub(crate) fn get(&self, key: &[u8]) -> MemReturn<'_> {
+        if let Some((skip_key, v)) = self.inner.first_ge(key) {
             let sk = InternalKeyRef::from(skip_key);
             let lookup = InternalKeyRef::from(key.as_ref());
 
@@ -193,7 +192,6 @@ impl MemtableInner {
     ) -> Self {
         let arena = Arena::new(arena_size, allocator);
         let skiplist = SkipList::new(comp.clone(), &arena);
-        let range_del_skiplist = SkipList::new(comp.clone(), &arena);
         Self {
             id,
             highest_seqno: AtomicU64::new(0),
