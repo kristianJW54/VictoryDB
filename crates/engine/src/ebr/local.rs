@@ -15,10 +15,10 @@ pub(super) struct Local {
     //
     guard_count: Cell<usize>,
     pin_count: Cell<Wrapping<usize>>,
-    epoch: CachePadded<AtomicU64>, // TODO: Do we need this? If we are not using local defer function caches?
-                                   //
-                                   // defer: Vec<()>, //NOTE: If we measure contention at the global level with deferred function storing
-                                   // then we can add local deferred functions caching and flushing to global
+    epoch: CachePadded<AtomicU64>,
+    //
+    // defer: Vec<()>, //NOTE: If we measure contention at the global level with deferred function storing
+    // then we can add local deferred functions caching and flushing to global
 }
 
 impl Local {

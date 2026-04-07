@@ -33,6 +33,10 @@ impl<const N: usize> InnerKey<N> {
 
     pub(super) fn as_slice(&self) -> &[u8] {
         match self.external {
+            // # Safety
+            //
+            // We can only set Option<NonNullu8>> with a valid pointer (non-null) and the API gurantees that we set external
+            // with a valid pointer before calling as_slice.
             Some(n) => unsafe { std::slice::from_raw_parts(n.as_ptr(), self.len) },
             None => self._inline[..self.len].as_ref(),
         }
@@ -45,11 +49,10 @@ impl<const N: usize> InnerKey<N> {
         self.external = None;
     }
 
-    // TODO: Does this need to be unsafe fn?
+    // Will Panic if the pointer is null
     pub(super) fn set_external(&mut self, len: usize, ptr: *mut u8) {
         self.len = len;
-        // TODO: Need to add Safety comment + test that we are actual safe here
-        self.external = unsafe { Some(NonNull::new_unchecked(ptr)) }
+        self.external = Some(NonNull::new(ptr).unwrap());
     }
 
     pub(super) fn encode_inline(&mut self, user_key: &[u8], seq_no: u64, op: OperationType) {
@@ -58,5 +61,13 @@ impl<const N: usize> InnerKey<N> {
 
         self.set_inline(total);
         encode_into(&mut self._inline[..total], user_key, seq_no, op);
+    }
+
+    pub(super) fn encode_inline_from_slice(&mut self, slice: &[u8]) {
+        let len = slice.len();
+        debug_assert!(len <= N);
+
+        self.set_inline(len);
+        self._inline[..len].copy_from_slice(slice);
     }
 }

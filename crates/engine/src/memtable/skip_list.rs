@@ -529,7 +529,7 @@ impl SkipList {
                     break;
                 }
 
-                // We failed to CAS, search again and retry - // TODO: Do we want metrics here do measure contention?
+                // We failed to CAS, search again and retry - // TODO: Do we want metrics here to measure contention?
                 traversal_ctx = self.search(key);
 
                 if let Some(node) = traversal_ctx.searched_node {
@@ -637,7 +637,7 @@ impl SkipList {
                     break;
                 }
 
-                // We failed to CAS, search again and retry - // TODO: Do we want metrics here do measure contention?
+                // We failed to CAS, search again and retry - // TODO: Do we want metrics here to measure contention?
                 traversal_ctx = self.search(key);
 
                 if let Some(node) = traversal_ctx.searched_node {
@@ -702,7 +702,6 @@ impl SkipList {
         }
     }
 
-    // TODO: Add range iter operation
     pub(super) fn range<'a, R>(&'a self, bound: R) -> RangeIter<'a>
     where
         R: RangeBounds<&'a [u8]>,

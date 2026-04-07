@@ -19,6 +19,8 @@ pub(crate) const MAX_BUFFER_RETAINED: usize = 4096;
 pub(super) fn encode_into(dst: &mut [u8], user_key: &[u8], seq_no: u64, op_type: OperationType) {
     let user_len = user_key.len();
 
+    debug_assert!(user_len + 8 <= dst.len());
+
     dst[..user_len].copy_from_slice(user_key);
     let trailer = encode_trailer(seq_no, op_type);
     dst[user_len..user_len + 8].copy_from_slice(&trailer);
