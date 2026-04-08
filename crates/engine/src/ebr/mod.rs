@@ -37,10 +37,7 @@ Legend:
 
 use guard::EpochGuard;
 
-use crate::{
-    ebr::{global::collector, local::LocalHandle},
-    thread_ctx::TCTX,
-};
+use crate::{ebr::local::LocalHandle, thread_ctx::TCTX};
 
 // We need crate level functions here to call which can handle the module functionality
 

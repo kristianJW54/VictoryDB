@@ -20,10 +20,13 @@ pub(super) struct Local {
     guard_count: Cell<usize>,
     pin_count: Cell<Wrapping<usize>>,
     epoch: CachePadded<AtomicU64>,
-    collector: *const Collector, // TODO: Later move to Arc<Collector> if we have multi DB Instances
-                                 //
-                                 // defer: Vec<()>, //NOTE: If we measure contention at the global level with deferred function storing
-                                 // then we can add local deferred functions caching and flushing to global
+    collector: *const Collector,
+    // NOTE: If we want to support multi DB Instances, then we need to change how collector is stored
+    // because we would not be using TLS on multi instances and would need to use explicit handles
+    // and collector's lifetime would have to be managed
+    //
+    // defer: Vec<()>, //NOTE: If we measure contention at the global level with deferred function storing
+    // then we can add local deferred functions caching and flushing to global
 }
 
 impl Local {
@@ -35,15 +38,19 @@ impl Local {
                 epoch: CachePadded {
                     value: AtomicU64::new(0),
                 },
+                collector,
             })),
         }
     }
 
     pub(super) fn pin(&self) -> EpochGuard {
-        // TODO: Add actual pinning logic
-        EpochGuard {
+        let guard = EpochGuard {
             local: self as *const Local,
-        }
+        };
+
+        // Pinning logic
+
+        guard
     }
 }
 

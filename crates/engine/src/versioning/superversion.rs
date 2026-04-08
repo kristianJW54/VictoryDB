@@ -1,3 +1,4 @@
+use std::num::Wrapping;
 //
 //
 //
@@ -14,4 +15,20 @@ pub(crate) struct Superversion {
     mem: Arc<Memtable<Mutable>>,
     imm: Arc<Memtable<Immutable>>,
     // NOTE: Version
+}
+
+pub(crate) struct SVCache {
+    generation: u64,
+    sv: *const Superversion,
+}
+
+impl SVCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            generation: 0,
+            sv: std::ptr::null(),
+        }
+    }
+
+    // Methods operating or deferencing the ptr MUST use a pin()
 }

@@ -4,13 +4,14 @@
 //
 //
 
-use crate::ebr::global::collector;
+use crate::ebr::global::tls_collector;
 use crate::ebr::local::LocalHandle;
 use crate::key::internal_key::Ephemeral_Buffer;
+use crate::versioning::superversion::SVCache;
 
 pub(crate) struct ThreadCtx {
     ebr: LocalHandle,
-    // NOTE: Add super version cache
+    sv_cache: SVCache,
     key_buffer: Ephemeral_Buffer,
     // NOTE: Add PerfContext/Metrics
     // NOTE: Add IOContext/Metrics
@@ -19,7 +20,8 @@ pub(crate) struct ThreadCtx {
 impl ThreadCtx {
     pub(crate) fn new() -> Self {
         Self {
-            ebr: collector().register(),
+            ebr: tls_collector().register(),
+            sv_cache: SVCache::new(),
             key_buffer: Ephemeral_Buffer::new(),
         }
     }
