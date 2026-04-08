@@ -24,6 +24,10 @@ impl ThreadCtx {
         }
     }
 
+    pub(crate) fn ebr_handle(&self) -> &LocalHandle {
+        &self.ebr
+    }
+
     pub(crate) fn inner_key_buf(&self) -> &Ephemeral_Buffer {
         &self.key_buffer
     }

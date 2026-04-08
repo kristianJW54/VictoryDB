@@ -5,20 +5,25 @@
 //
 //
 //
-
 use crate::ebr::global::Collector;
+use crate::ebr::guard::EpochGuard;
 
 use std::ops::Deref;
 use std::{cell::Cell, num::Wrapping, sync::atomic::AtomicU64};
+
+pub(crate) struct ParticipantEpochPtr(*const CachePadded<AtomicU64>);
+
+unsafe impl Send for ParticipantEpochPtr {}
 
 pub(super) struct Local {
     //
     guard_count: Cell<usize>,
     pin_count: Cell<Wrapping<usize>>,
     epoch: CachePadded<AtomicU64>,
-    //
-    // defer: Vec<()>, //NOTE: If we measure contention at the global level with deferred function storing
-    // then we can add local deferred functions caching and flushing to global
+    collector: *const Collector, // TODO: Later move to Arc<Collector> if we have multi DB Instances
+                                 //
+                                 // defer: Vec<()>, //NOTE: If we measure contention at the global level with deferred function storing
+                                 // then we can add local deferred functions caching and flushing to global
 }
 
 impl Local {
@@ -33,22 +38,33 @@ impl Local {
             })),
         }
     }
+
+    pub(super) fn pin(&self) -> EpochGuard {
+        // TODO: Add actual pinning logic
+        EpochGuard {
+            local: self as *const Local,
+        }
+    }
 }
 
-// We drive everything through the LocalHandle so we can safely share references across threads and control access to Local fields
 #[derive(Clone)]
 pub(crate) struct LocalHandle {
     local: *const Local,
 }
 
+// SAFETY: LocalHandle::pin must only be called by the thread that owns this Local.
+// Other threads may observe the atomic epoch field indirectly through collector scans,
+// but must not mutate Local's Cell-based fields.
 unsafe impl Send for LocalHandle {}
 unsafe impl Sync for LocalHandle {}
 
 impl LocalHandle {
     pub(crate) fn new(collector: &Collector) -> Self {
-        Self {
-            local: Local::register(collector).local,
-        }
+        Local::register(collector)
+    }
+
+    pub(super) fn pin(&self) -> EpochGuard {
+        unsafe { (*self.local).pin() }
     }
 }
 

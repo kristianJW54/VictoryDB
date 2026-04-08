@@ -2,7 +2,7 @@
 //
 //
 //
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicPtr};
 
 use crate::{
     memtable::memtable::{Memtable, Mutable},
@@ -18,7 +18,7 @@ pub(crate) struct ColumnFamilyData {
     imm: Arc<MemTableList>,
     //
     // Read Path
-    superversion: Arc<Superversion>,
+    superversion: AtomicPtr<Superversion>,
     // --
     // NOTE: *Version
     // NOTE: ThreadLocal<Superversion>,

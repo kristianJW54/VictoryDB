@@ -34,3 +34,25 @@ Legend:
 - epoch only updates when transitioning unpinned → pinned
 
  */
+
+use guard::EpochGuard;
+
+use crate::{
+    ebr::{global::collector, local::LocalHandle},
+    thread_ctx::TCTX,
+};
+
+// We need crate level functions here to call which can handle the module functionality
+
+#[inline]
+pub(crate) fn pin() -> EpochGuard {
+    with_handle(|h| h.pin())
+}
+
+#[inline]
+fn with_handle<F, R>(f: F) -> R
+where
+    F: FnOnce(&LocalHandle) -> R,
+{
+    TCTX.with(|ctx| f(ctx.ebr_handle()))
+}
