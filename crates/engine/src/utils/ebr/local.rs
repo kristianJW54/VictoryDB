@@ -10,12 +10,9 @@ use crate::utils::ebr::guard::EpochGuard;
 
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::atomic;
 use std::sync::atomic::Ordering;
 use std::{cell::Cell, num::Wrapping, sync::atomic::AtomicU64};
-
-pub(super) struct ParticipantEpochPtr(*const CachePadded<AtomicU64>);
-
-unsafe impl Send for ParticipantEpochPtr {}
 
 pub(super) struct Local {
     //
@@ -32,6 +29,10 @@ pub(super) struct Local {
 }
 
 impl Local {
+    //
+    // An interval we can use with % to determine on pin count increment if we should collect
+    const PIN_COLLECT: usize = 64;
+
     pub(super) fn register(domain: Arc<Global>) -> LocalHandle {
         //
         // Build local
@@ -44,20 +45,26 @@ impl Local {
             domain: domain.clone(),
         });
 
-        // Get the raw pointer to store in the handle
         let ptr = Box::into_raw(local);
 
         // Register the local's epoch pointer with the global participants list
-        domain
-            .participants
-            .lock()
-            .unwrap()
-            .push(ParticipantEpochPtr(unsafe { &(*ptr).epoch }));
+        domain.participants.lock().unwrap().push(ptr);
 
         // Return the handle with the raw pointer
         LocalHandle { local: ptr }
     }
 
+    #[inline]
+    pub(super) fn global(&self) -> &Global {
+        &self.domain
+    }
+
+    #[inline]
+    pub(super) fn is_pinned(&self) -> bool {
+        self.guard_count.get() > 0
+    }
+
+    #[inline]
     pub(super) fn pin(&self) -> EpochGuard {
         let guard = EpochGuard {
             local: self as *const Local,
@@ -65,22 +72,32 @@ impl Local {
 
         // Pinning logic
         //
-        // First we must take the global epoch value and store it
+
+        // First we must increment the guard count which will tell us if we are the first guard then
+        // we can safely load the global epoch value and store it in our local epoch
+        let guard_count = self.guard_count.get();
         //
+        self.guard_count.set(guard_count.checked_add(1).unwrap());
 
-        let global_epoch = self.domain.epoch.load(Ordering::Relaxed);
+        if guard_count == 0 {
+            // NOTE: Check out crossbeams wild compiler optimization's here:
+            // https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-epoch/src/internal.rs#L409
+            // I tried my hardest to understand this, but my simple use-case just doesn't warrant it
+            // (I tell myself this rather than admit that I feel stupid)
+            //
+            // Alas, my basic version
+            let global_epoch = self.domain.epoch.load(Ordering::Acquire);
+            self.epoch.value.store(global_epoch, Ordering::Release);
+            atomic::fence(Ordering::SeqCst);
+        }
 
-        self.epoch.value.store(global_epoch, Ordering::Release);
+        // Increment the pin count and check if we should collect
+        let pin_count = self.pin_count.get();
+        self.pin_count.set(pin_count + Wrapping(1));
 
-        self.domain
-            .epoch
-            .compare_exchange(
-                global_epoch,
-                global_epoch + 1,
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .unwrap_or(global_epoch);
+        if pin_count.0 % Self::PIN_COLLECT == 0 {
+            // Call global.collect()
+        }
 
         guard
     }
@@ -104,6 +121,10 @@ impl LocalHandle {
 
     pub(super) fn pin(&self) -> EpochGuard {
         unsafe { (*self.local).pin() }
+    }
+
+    pub(super) fn local(&self) -> &Local {
+        unsafe { &*self.local }
     }
 }
 
@@ -136,11 +157,11 @@ mod tests {
 
         // Print the global epoch
         // Print the local epoch
-        let local = unsafe { &*(guard.local) };
+        let local = guard.local();
 
         // Print local through TLS
         thread_ctx(|ctx| {
-            let local = unsafe { &*(ctx.ebr_handle().local) };
+            let local = ctx.ebr_handle().local();
             println!(
                 "local epoch (TLS): {}",
                 local.epoch.value.load(Ordering::Relaxed)
@@ -152,6 +173,7 @@ mod tests {
             local.domain.epoch.load(Ordering::Relaxed)
         );
 
+        println!("local guard count: {}", local.guard_count.get());
         println!("local epoch: {}", local.epoch.value.load(Ordering::Relaxed));
     }
 }

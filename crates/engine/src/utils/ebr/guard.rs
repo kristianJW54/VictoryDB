@@ -11,3 +11,11 @@ pub(crate) struct EpochGuard {
 }
 
 // We do stuff with the guard under a pin (defer_destroy etc)
+//
+
+impl EpochGuard {
+    //
+    pub(super) fn local(&self) -> &Local {
+        unsafe { &*self.local }
+    }
+}

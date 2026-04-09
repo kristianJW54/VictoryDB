@@ -5,7 +5,7 @@
 //
 //
 //
-use crate::utils::ebr::local::{LocalHandle, ParticipantEpochPtr};
+use crate::utils::ebr::local::{Local, LocalHandle};
 
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,9 @@ pub(crate) struct Global {
     // NOTE: ThreadList -> Mutex<Vec<Thread>>? Would prefer lock-free but
     // Unless benchmarking shows a significant performance gain, prefer simplicity with a lock as only superversion will be primary
     // user of this at the moment
-    pub(super) participants: Mutex<Vec<ParticipantEpochPtr>>,
+    //
+    // NOTE: Can we make this Lcok-free linked list if we don't use reclamation on the participants?
+    pub(super) participants: Mutex<Vec<*const Local>>,
     pub(super) epoch: AtomicU64,
     defer: Mutex<Vec<()>>, // Global deferred functions (will be a pointer to destruct)
 }
