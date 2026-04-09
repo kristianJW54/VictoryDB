@@ -1,6 +1,5 @@
 mod column_family;
 mod db;
-mod ebr;
 mod iterator;
 mod key;
 mod memory;

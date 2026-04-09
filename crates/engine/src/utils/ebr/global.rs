@@ -5,10 +5,19 @@
 //
 //
 //
-use crate::ebr::local::{Local, LocalHandle, ParticipantEpochPtr};
+use crate::utils::ebr::local::{LocalHandle, ParticipantEpochPtr};
 
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+
+// Global epoch advancement:
+//
+// - The global epoch may advance from E → E+1 if NO thread is pinned with
+//   local_epoch < E.
+// - Pinned threads are allowed to lag behind the global epoch.
+// - A thread observes newer epochs only by UNPINNING and PINNING again.
+//
+// So all threads must have observed the current global epoch.
 
 pub(crate) struct Global {
     // NOTE: ThreadList -> Mutex<Vec<Thread>>? Would prefer lock-free but
@@ -46,7 +55,7 @@ impl Collector {
     }
 
     pub(crate) fn register(&self) -> LocalHandle {
-        Local::register(self)
+        LocalHandle::new(self.global.clone())
     }
 }
 

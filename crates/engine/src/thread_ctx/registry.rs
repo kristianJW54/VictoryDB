@@ -4,9 +4,9 @@
 //
 //
 
-use crate::ebr::global::tls_collector;
-use crate::ebr::local::LocalHandle;
 use crate::key::internal_key::Ephemeral_Buffer;
+use crate::utils::ebr::global::tls_collector;
+use crate::utils::ebr::local::LocalHandle;
 use crate::versioning::superversion::SVCache;
 
 pub(crate) struct ThreadCtx {

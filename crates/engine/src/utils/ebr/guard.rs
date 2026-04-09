@@ -4,7 +4,7 @@
 //
 //
 //
-use crate::ebr::local::Local;
+use crate::utils::ebr::local::Local;
 
 pub(crate) struct EpochGuard {
     pub(super) local: *const Local,
