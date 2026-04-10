@@ -5,41 +5,76 @@
 // not be deleted until arena is dropped. For that reason, this must be used when Nodes are expected to reach a natural limit.
 //
 
+use crate::memory::ArenaSize;
+use crate::memory::allocator::{Allocator, SystemAllocator};
 use crate::memory::arena::Arena;
 
-use std::cell::Cell;
+use std::alloc::Layout;
 use std::mem::size_of;
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicBool, AtomicPtr};
 
-pub(crate) struct ArenaList<T, const MAX_T_COUNT: usize> {
+//
+//
+pub(crate) struct ArenaList<T: Sized> {
     arena: Arena,
     head: AtomicPtr<Node<T>>,
 }
 
 // Impl
-// - const fn for rebuild trigger based on approx memory usage
 // - New()
 // - Push()
 // - Iter()
 // - Rebuild()
 
-impl<T, const MAX_T_COUNT: usize> ArenaList<T, MAX_T_COUNT> {
-    const fn chunk_size() -> usize {
-        /*
+impl<T> ArenaList<T> {
+    //
+    pub(crate) fn new(nodes_per_chunk: usize, max_nodes: usize) -> Self {
+        //
+        debug_assert!(nodes_per_chunk <= max_nodes);
 
-        T = 10
-        MAX_T_COUNT = 1000
-        est arena size = 10000 bytes
+        let cap = size_of::<Node<T>>() * max_nodes;
+        let chunk_size = size_of::<Node<T>>() * nodes_per_chunk;
 
-        chunk size = MAX_T_COUNT % 10
-
-        */
-
-        size_of::<Node<T>>() * MAX_T_COUNT
+        Self {
+            arena: Arena::new(
+                ArenaSize::Custom(chunk_size, cap),
+                Allocator::System(SystemAllocator::new()),
+            ),
+            head: AtomicPtr::new(std::ptr::null_mut()),
+        }
     }
 }
 
-struct Node<T> {
-    active: Cell<u8>,
+#[repr(C)]
+struct Node<T: Sized> {
     next: AtomicPtr<Node<T>>,
+    data: T,
+    active: AtomicBool,
+}
+
+// Impl
+// - Alloc
+// - Init_node()?
+// - Load_next()?
+
+impl<T> Node<T> {
+    fn new(data: T) -> Self {
+        Self {
+            next: AtomicPtr::new(std::ptr::null_mut()),
+            data,
+            active: AtomicBool::new(true),
+        }
+    }
+
+    fn alloc(arena: &Arena, data: T) {
+        //
+        let node = Node::new(data);
+
+        let layout = Layout::new::<Node<T>>();
+
+        match unsafe { arena.alloc_raw_fallback(layout) } {
+            Ok(_) => {}
+            Err(e) => println!("I want to try and rebuild the arena: {:?}", e),
+        }
+    }
 }

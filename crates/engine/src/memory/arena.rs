@@ -27,7 +27,7 @@ use std::sync::{
 use crate::memory::allocator::Allocator;
 use crate::memory::{ArenaPolicy, ArenaSize};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArenaError {
     AllocationError(usize),
     Overflow,
@@ -35,7 +35,32 @@ pub(crate) enum ArenaError {
     ArenaFull,
 }
 
-pub(super) type ChunkPtr = AtomicPtr<u8>;
+#[derive(Debug)]
+struct Chunk {
+    mem: Box<[u8]>,
+    bump: AtomicUsize,
+}
+
+impl Chunk {
+    fn new(mem: Box<[u8]>) -> Self {
+        Self {
+            mem,
+            bump: AtomicUsize::new(0),
+        }
+    }
+
+    fn get_bump(&self) -> usize {
+        self.bump.load(Ordering::Relaxed)
+    }
+
+    fn get_mem(&self) -> &[u8] {
+        self.mem.as_ref()
+    }
+
+    fn get_mem_ptr(&self) -> *const u8 {
+        self.mem.as_ptr()
+    }
+}
 
 /// Arena is responsible for holding blocks of memory and managing memory allocation into those blocks. It will handle alignment and block allocation.
 /// Only Memtables will hold an arena.
@@ -45,10 +70,8 @@ pub(super) type ChunkPtr = AtomicPtr<u8>;
 ///
 /// For this reason, no specific Drop implementation is needed. Instead, we rely on memtables to implement Drop to know when an arena can be deallocated.
 pub(crate) struct Arena {
-    current_chunk: ChunkPtr,
-    end: ChunkPtr,
-    chunks: Mutex<Vec<Box<[u8]>>>,
-    bump: AtomicUsize,
+    current_chunk: AtomicPtr<Chunk>,
+    chunks: Mutex<Vec<Box<Chunk>>>,
     allocated_bytes: AtomicUsize,
     memory_used: AtomicUsize,
     // TODO: May want total padding bytes? for later optimization
@@ -60,19 +83,19 @@ impl Arena {
     pub(crate) fn new(policy: ArenaSize, allocator: Allocator) -> Self {
         let policy = policy.to_policy();
 
-        let mut heap = unsafe { allocator.allocate(policy.block_size) };
-        let chunk_ptr = heap.as_mut_ptr();
-        let end = unsafe { chunk_ptr.add(policy.block_size) };
+        let heap = unsafe { allocator.allocate(policy.block_size) };
+        let chunk = Box::new(Chunk::new(heap));
+
+        // Take a raw pointer from the borrow of the box so we don't consume the box and can still store it in the vec
+        let chunk_ptr: *mut Chunk = (&*chunk as *const Chunk).cast_mut();
 
         let block_cap = policy.cap / policy.block_size;
         let mut chunks = Vec::with_capacity(block_cap);
-        chunks.push(heap);
+        chunks.push(chunk);
 
         Self {
             current_chunk: AtomicPtr::new(chunk_ptr),
-            end: AtomicPtr::new(end),
             chunks: Mutex::new(chunks),
-            bump: AtomicUsize::new(0),
             allocated_bytes: AtomicUsize::new(policy.block_size),
             memory_used: AtomicUsize::new(0),
             allocator,
@@ -80,6 +103,11 @@ impl Arena {
         }
     }
 
+    fn get_chunk(&self) -> &mut Chunk {
+        unsafe { &mut *self.current_chunk.load(Ordering::Acquire) }
+    }
+
+    #[inline(always)]
     fn alignment_check(&self, bump: usize, layout: Layout) -> Result<(usize, usize), ArenaError> {
         // Get the next required offset based on the layout alignment
         debug_assert!(layout.align().is_power_of_two());
@@ -89,7 +117,7 @@ impl Arena {
             .checked_add(layout.size())
             .ok_or(ArenaError::Overflow)?;
 
-        if next > self.policy.block_size {
+        if next > self.get_chunk().mem.len() {
             return Err(ArenaError::Overflow);
         }
 
@@ -101,12 +129,16 @@ impl Arena {
     //
 
     // NOTE: I've made the closure unsafe and it is up to the caller to ensure that the Layout and write to the pointer are correct.
+    #[inline(always)]
     pub(crate) unsafe fn alloc_raw(&self, layout: Layout) -> NonNull<u8> {
         //
 
         loop {
+            // Get chunk from current_chunk
+            let chunk = self.get_chunk();
+
             // We get relaxed bump here because we will double check if CAS if it fails we try to get bump again in the loop
-            let bump = self.bump.load(Ordering::Relaxed);
+            let bump = chunk.bump.load(Ordering::Relaxed);
 
             match self.alignment_check(bump, layout) {
                 Err(_) => {
@@ -119,7 +151,7 @@ impl Arena {
                 }
                 Ok((aligned, next)) => {
                     // If CAS works we can write to the arena heap
-                    if self
+                    if chunk
                         .bump
                         .compare_exchange_weak(bump, next, Ordering::AcqRel, Ordering::Relaxed)
                         .is_ok()
@@ -127,12 +159,12 @@ impl Arena {
                         // If we are ok then we can write to the arena heap by passing the aligned pointer into closure
                         //
 
-                        let current_ptr = self.current_chunk.load(Ordering::Acquire);
+                        let base = chunk.mem.as_mut_ptr();
 
-                        let ptr = unsafe { NonNull::new_unchecked(current_ptr.add(aligned)) };
+                        let ptr = unsafe { NonNull::new_unchecked(base.add(aligned)) };
 
                         // Update meta data
-                        self.memory_used.fetch_add(layout.size(), Ordering::AcqRel);
+                        self.memory_used.fetch_add(layout.size(), Ordering::Relaxed);
 
                         return ptr;
                     }
@@ -144,11 +176,64 @@ impl Arena {
         }
     }
 
+    #[inline(always)]
+    pub(crate) unsafe fn alloc_raw_fallback(
+        &self,
+        layout: Layout,
+    ) -> Result<NonNull<u8>, ArenaError> {
+        //
+
+        loop {
+            // Get chunk from current_chunk
+            let chunk = self.get_chunk();
+
+            // We get relaxed bump here because we will double check if CAS if it fails we try to get bump again in the loop
+            let bump = chunk.bump.load(Ordering::Relaxed);
+
+            match self.alignment_check(bump, layout) {
+                Err(_) => {
+                    // If we fail alignment check we try_new_chunk
+                    match self.try_new_chunk(layout) {
+                        // Return out
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    };
+                }
+                Ok((aligned, next)) => {
+                    // If CAS works we can write to the arena heap
+                    if chunk
+                        .bump
+                        .compare_exchange_weak(bump, next, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        // If we are ok then we can write to the arena heap by passing the aligned pointer into closure
+                        //
+
+                        let base = chunk.mem.as_mut_ptr();
+
+                        let ptr = unsafe { NonNull::new_unchecked(base.add(aligned)) };
+
+                        // Update meta data
+                        self.memory_used.fetch_add(layout.size(), Ordering::Relaxed);
+
+                        return ptr;
+                    }
+
+                    // Another thread beat us - we try again
+                    std::hint::spin_loop();
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
     fn try_new_chunk(&self, layout: Layout) -> Result<(), ArenaError> {
         // We need to lock and then check we are still ok to mutate the vec and pointer
         let mut lock = self.chunks.lock().unwrap();
 
-        let bump = self.bump.load(Ordering::Relaxed);
+        let chunk = self.get_chunk();
+
+        let bump = chunk.bump.load(Ordering::Relaxed);
 
         // Now we double check we are still good to mutate by checking size and alignment
         if let Ok(_) = self.alignment_check(bump, layout) {
@@ -166,20 +251,14 @@ impl Arena {
             .fetch_add(self.policy.block_size, Ordering::Relaxed);
 
         // Now we allocate a new chunk of memory from the allocator
-        let mut chunk = unsafe { self.allocator.allocate(self.policy.block_size) };
-        let chunk_ptr = chunk.as_mut_ptr();
+        let heap = unsafe { self.allocator.allocate(self.policy.block_size) };
+        let new_chunk = Box::new(Chunk::new(heap));
+        let chunk_ptr: *mut Chunk = (&*new_chunk as *const Chunk).cast_mut();
 
-        lock.push(chunk);
+        lock.push(new_chunk);
 
-        // Update the bump pointer
-        self.bump.store(0, Ordering::Relaxed);
-        // And update end pointer
-        self.end.store(
-            unsafe { chunk_ptr.add(self.policy.block_size) },
-            Ordering::Relaxed,
-        );
         // Now we need to atomically update the current chunk pointer
-        self.current_chunk.store(chunk_ptr, Ordering::Relaxed);
+        self.current_chunk.store(chunk_ptr, Ordering::Release);
 
         Ok(())
     }
@@ -208,11 +287,11 @@ impl Arena {
 
     #[inline]
     pub(crate) fn get_current_init_slice(&self) -> &[u8] {
-        let current = self.current_chunk.load(Ordering::Relaxed);
+        let chunk = self.get_chunk();
 
-        let bump = self.bump.load(Ordering::Relaxed);
+        let bump = chunk.get_bump();
 
-        unsafe { &*slice_from_raw_parts(current, bump) }
+        unsafe { &*slice_from_raw_parts(chunk.mem.as_ptr(), bump) }
     }
 
     pub(crate) fn print_address(&self) {
@@ -237,20 +316,38 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
         );
 
+        let threads = 10;
+        let iters = 1000;
+
         thread::scope(|s| {
-            // Don't need arc because scope guarantees arena is dropped when scope ends
-            for _ in 0..10 {
+            for _ in 0..threads {
                 s.spawn(|| {
-                    for _ in 0..1000 {
+                    for _ in 0..iters {
                         unsafe {
                             let _ = arena.alloc_raw(Layout::new::<u32>());
-                        };
+                        }
                     }
                 });
             }
         });
 
-        println!("arena bump {:?}", arena.bump.load(Ordering::Relaxed));
+        let expected = threads * iters * std::mem::size_of::<u32>();
+
+        // 1. Total memory used must match
+        assert_eq!(arena.memory_used.load(Ordering::Relaxed), expected);
+
+        // 2. No chunk overflow
+        let chunks = arena.chunks.lock().unwrap();
+
+        for chunk in chunks.iter() {
+            let bump = chunk.bump.load(Ordering::Relaxed);
+            assert!(bump <= chunk.mem.len());
+        }
+
+        // 3. Cap respected
+        assert!(arena.allocated_bytes.load(Ordering::Relaxed) <= arena.max_bytes());
+
+        println!("chunks used: {}", chunks.len());
     }
 
     #[test]
@@ -260,26 +357,27 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
         );
 
-        println!("arena {:?}", arena.chunks.lock().unwrap()[0]);
+        unsafe {
+            let layout = Layout::from_size_align(8, 8).unwrap();
+            let ptr = arena.alloc_raw(layout);
+            std::ptr::write(ptr.as_ptr() as *mut u64, 123);
+        }
 
-        // Want to print up until the bump
-        let current = arena.current_chunk.load(Ordering::Relaxed).addr();
-        let bump = arena.bump.load(Ordering::Relaxed);
+        let chunk = arena.get_chunk();
+        let mem = chunk.get_mem();
+        let bump = chunk.get_bump();
 
-        let diff = bump - current;
-
-        println!("chunk {:?}", unsafe {
-            &*slice_from_raw_parts(current as *const u8, diff)
-        });
-
-        println!("arena max size {:?}", arena.max_bytes());
-        println!("arena max blocks {:?}", arena.number_of_blocks());
+        assert_eq!(arena.memory_used(), 8);
+        assert!(bump <= mem.len());
+        assert!(arena.max_bytes() == 20);
+        assert!(arena.number_of_blocks() == 2);
     }
 
     #[test]
+    #[should_panic]
     fn alignment_bitwise() {
         let arena = Arena::new(
-            ArenaSize::Custom(10, 20),
+            ArenaSize::Custom(10, 10),
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -322,32 +420,24 @@ mod tests {
             let ptr = arena.alloc_raw(layout_u16);
             ptr.write(12);
         }
+
+        // Take copy of current chunk ptr
+        let current = arena.current_chunk.load(Ordering::Relaxed);
+
         let layout_u32_2 = Layout::new::<u32>();
         unsafe {
             let ptr = arena.alloc_raw(layout_u32_2);
             ptr.write(67)
         }
 
-        println!(
-            "arena first vec chunk  {:?}",
-            arena.chunks.lock().unwrap()[0]
-        );
+        let check = arena.current_chunk.load(Ordering::Relaxed);
+        assert!(current != check);
 
-        println!(
-            "arena second vec chunk {:?}",
-            arena.chunks.lock().unwrap()[1]
-        );
-
-        let slice = unsafe {
-            std::slice::from_raw_parts(
-                arena.current_chunk.load(Ordering::Relaxed),
-                arena.policy.block_size,
-            )
-        };
-        println!("from current pointer   {:?}", slice);
-        println!("memory used {:?}", arena.memory_used());
+        assert!(arena.blocks_used() == 2);
+        assert!(arena.chunks.lock().unwrap().len() == 2);
     }
 
+    // TODO: Need to write assertions for this
     #[test]
     fn tower_and_bytes() {
         let arena = Arena::new(
