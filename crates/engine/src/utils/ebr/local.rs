@@ -8,6 +8,7 @@
 use crate::utils::ebr::global::{Collector, Global};
 use crate::utils::ebr::guard::EpochGuard;
 
+use std::f64::consts::PI;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic;
@@ -16,6 +17,7 @@ use std::{cell::Cell, num::Wrapping, sync::atomic::AtomicU64};
 
 pub(super) struct Local {
     //
+    handle_count: Cell<usize>,
     guard_count: Cell<usize>,
     pin_count: Cell<Wrapping<usize>>,
     epoch: CachePadded<AtomicU64>,
@@ -37,6 +39,7 @@ impl Local {
         //
         // Build local
         let local = Box::new(Local {
+            handle_count: Cell::new(1),
             guard_count: Cell::new(0),
             pin_count: Cell::new(Wrapping(0)),
             epoch: CachePadded {
@@ -101,6 +104,65 @@ impl Local {
 
         guard
     }
+
+    #[inline]
+    pub(super) fn unpin(&self) {
+        let guard_count = self.guard_count.get();
+        self.guard_count.set(guard_count - 1);
+
+        // If we were the last guard, we should reset our Local Epoch
+        if guard_count == 1 {
+            self.epoch.value.store(0, Ordering::Release);
+            // Also if we are the last LocalHandle about to be dropped then we should handle clean up of our Local
+            if self.handle_count.get() == 0 {
+                // TODO: Handle cleanup
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) fn acquire_handle(&self) {
+        let handle_count = self.handle_count.get();
+        debug_assert!(handle_count >= 1);
+        self.handle_count.set(handle_count + 1);
+    }
+
+    #[inline]
+    pub(super) fn release_handle(this: *const Self) {
+        let guard_count = unsafe { (*this).guard_count.get() };
+        let handle_count = unsafe { (*this).handle_count.get() };
+
+        debug_assert!(handle_count >= 1);
+
+        unsafe {
+            if guard_count == 0 {
+                (*this).handle_count.set(handle_count - 1);
+            }
+        }
+
+        if guard_count == 0 && handle_count == 1 {
+            unsafe {
+                todo!()
+                // TODO: Self::finalise()
+            }
+        }
+    }
+
+    #[cold]
+    pub(super) fn finalise(this: *const Self) {
+        // We need to check that we hold no guards or handles
+        unsafe {
+            debug_assert!((*this).guard_count.get() == 0);
+            debug_assert!((*this).handle_count.get() == 0);
+        }
+
+        let global = unsafe { (*this).global() };
+
+        unsafe {
+            // TODO: Think of a better way to do this
+            global.participants.lock().unwrap().retain(|p| *p != this);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -125,6 +187,14 @@ impl LocalHandle {
 
     pub(super) fn local(&self) -> &Local {
         unsafe { &*self.local }
+    }
+}
+
+impl Drop for LocalHandle {
+    fn drop(&mut self) {
+        unsafe {
+            Local::release_handle(&*self.local);
+        }
     }
 }
 
