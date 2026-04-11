@@ -5,6 +5,9 @@ edition.workspace = true
 
 [dependencies]
 
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
 [features]
 default = ["arena_direct"]
 arena_direct = []
