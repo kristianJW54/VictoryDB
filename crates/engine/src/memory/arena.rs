@@ -216,7 +216,7 @@ impl Arena {
                         // Update meta data
                         self.memory_used.fetch_add(layout.size(), Ordering::Relaxed);
 
-                        return ptr;
+                        return Ok(ptr);
                     }
 
                     // Another thread beat us - we try again
