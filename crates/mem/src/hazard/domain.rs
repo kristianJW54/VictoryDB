@@ -27,8 +27,8 @@ macro_rules! static_unique_domain {
                 _inner: (),
             }
             // Safety: $family can only be constructed by this module, since it contains private members
-            unsafe impl $crate::utils::hazard::domain::Singleton for $family {}
-            pub static $domain: $crate::utils::hazard::domain::HzdDomain<$family> = $crate::utils::hazard::domain::HzdDomain::new(&$family {
+            unsafe impl $crate::hazard::domain::Singleton for $family {}
+            pub static $domain: $crate::hazard::domain::HzdDomain<$family> = $crate::hazard::domain::HzdDomain::new(&$family {
                 _inner: (),
             });
         }

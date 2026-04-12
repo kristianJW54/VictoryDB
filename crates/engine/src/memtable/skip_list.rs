@@ -33,7 +33,7 @@ use std::{panic, slice};
 
 use crate::key::comparator::{Comparator, DefaultComparator};
 use crate::key::internal_key::InternalKeyRef;
-use crate::memory::arena::{Arena, ArenaError};
+use mem::arena::{Arena, ArenaError};
 
 // ------------------------------------------------------
 
@@ -49,8 +49,8 @@ impl From<std::alloc::LayoutError> for SkipListError {
     }
 }
 
-impl From<crate::memory::arena::ArenaError> for SkipListError {
-    fn from(err: crate::memory::arena::ArenaError) -> Self {
+impl From<mem::arena::ArenaError> for SkipListError {
+    fn from(err: mem::arena::ArenaError) -> Self {
         SkipListError::Arena(err)
     }
 }
@@ -788,12 +788,9 @@ impl<'a> Iterator for RangeIter<'a> {
 #[cfg(test)]
 mod tests {
 
-    use crate::memory::{
-        ArenaSize,
-        allocator::{Allocator, SystemAllocator},
-    };
-
     use super::*;
+    use mem::allocator::*;
+    use mem::arena::*;
 
     #[test]
     fn basic_node_layout() {

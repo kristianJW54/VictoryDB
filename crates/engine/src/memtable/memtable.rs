@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicU8, AtomicU16};
 use crate::iterator::internal_iterator::InternalIterator;
 use crate::key::comparator::Comparator;
 use crate::key::internal_key::{InternalKeyRef, OperationType, encode_trailer};
-use crate::memory::ArenaSize;
-use crate::memory::allocator::Allocator;
-use crate::memory::arena::Arena;
 use crate::memtable::skip_list::{Iter, Node, SkipList};
+use mem::allocator::Allocator;
+use mem::arena::Arena;
+use mem::arena::ArenaSize;
 
 pub(crate) type MemID = u64;
 

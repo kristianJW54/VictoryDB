@@ -5,9 +5,9 @@ mod tests {
     use crate::key::internal_key::{
         EphemeralInternalKey, EphemeralKey, LookUpInternalKey, LookUpKey, OperationType,
     };
-    use crate::memory::allocator::*;
-    use crate::memory::*;
     use crate::memtable::memtable::*;
+    use mem::allocator::*;
+    use mem::arena::*;
 
     #[test]
     fn memtable_basic_insert_and_get() {

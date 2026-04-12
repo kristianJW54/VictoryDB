@@ -15,11 +15,9 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-use crate::memory::LARGE_ARENA_BLOCK_SIZE;
-
 // Arean Allocator must only allocate one arena at a time and give ownership of that memory to an arena
 
-pub(crate) enum Allocator {
+pub enum Allocator {
     System(SystemAllocator),
     NUMA,
     HugePage,
@@ -28,7 +26,7 @@ pub(crate) enum Allocator {
 }
 
 impl Allocator {
-    pub(crate) unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
+    pub unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
         match self {
             Allocator::System(allocator) => unsafe { allocator.allocate(size) },
             _ => unimplemented!(),
@@ -37,15 +35,15 @@ impl Allocator {
 }
 
 // Default Allocator for allocating chunks to arena
-pub(crate) struct SystemAllocator {}
+pub struct SystemAllocator {}
 
 impl SystemAllocator {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {}
     }
 
     // Default Allocator for allocating chunks to arena
-    pub(crate) unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
+    pub unsafe fn allocate(&self, size: usize) -> Box<[u8]> {
         #[cfg(debug_assertions)]
         {
             // Zeroed memory in debug — safe to inspect fully

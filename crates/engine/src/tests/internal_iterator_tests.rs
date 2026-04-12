@@ -5,9 +5,9 @@ mod tests {
     use crate::key::comparator::InternalKeyComparator;
     use crate::key::internal_key::{InternalKeyRef, OperationType};
     use crate::key::internal_key::{LookUpInternalKey, LookUpKey};
-    use crate::memory::allocator::*;
-    use crate::memory::*;
     use crate::memtable::memtable::*;
+    use mem::allocator::*;
+    use mem::arena::*;
 
     #[test]
     fn seek_to_for_memtable() {

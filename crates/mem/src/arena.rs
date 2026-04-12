@@ -24,11 +24,69 @@ use std::sync::{
     atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 
-use crate::memory::allocator::Allocator;
-use crate::memory::{ArenaPolicy, ArenaSize};
+use crate::allocator::Allocator;
+
+// Constants
+const KB: usize = 1000;
+const MB: usize = KB;
+
+const TEST_ARENA_CAP: usize = 20;
+const DEFAULT_ARENA_CAP: usize = 64 * MB;
+const SMALL_ARENA_CAP: usize = 16 * MB;
+const MEDIUM_ARENA_CAP: usize = 32 * MB;
+const MAX_ARENA_BLOCK_SIZE: usize = 128 * MB;
+
+// Block sizes
+const TEST_ARENA_BLOCK_SIZE: usize = 10;
+const DEFAULT_ARENA_BLOCK_SIZE: usize = 2 * MB;
+const LARGE_ARENA_BLOCK_SIZE: usize = 8 * MB;
+const MEDIUM_ARENA_BLOCK_SIZE: usize = 4 * MB;
+const SMALL_ARENA_BLOCK_SIZE: usize = 1 * MB;
+
+pub enum ArenaSize {
+    Custom(usize, usize),
+    Default,
+    Small,
+    Medium,
+    Large,
+}
+
+impl ArenaSize {
+    pub fn to_policy(self) -> ArenaPolicy {
+        match self {
+            ArenaSize::Custom(block, cap) => ArenaPolicy {
+                block_size: block,
+                cap: cap,
+            },
+            ArenaSize::Default => ArenaPolicy {
+                block_size: DEFAULT_ARENA_BLOCK_SIZE,
+                cap: DEFAULT_ARENA_CAP,
+            },
+            ArenaSize::Small => ArenaPolicy {
+                block_size: SMALL_ARENA_BLOCK_SIZE,
+                cap: SMALL_ARENA_CAP,
+            },
+            ArenaSize::Medium => ArenaPolicy {
+                block_size: MEDIUM_ARENA_BLOCK_SIZE,
+                cap: MEDIUM_ARENA_CAP,
+            },
+            ArenaSize::Large => ArenaPolicy {
+                block_size: LARGE_ARENA_BLOCK_SIZE,
+                cap: DEFAULT_ARENA_CAP,
+            },
+        }
+    }
+}
+
+//
+#[derive(Debug)]
+pub struct ArenaPolicy {
+    pub block_size: usize,
+    pub cap: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArenaError {
+pub enum ArenaError {
     AllocationError(usize),
     Overflow,
     ChunkDoubleCheckFailed,
@@ -69,7 +127,7 @@ impl Chunk {
 /// It is the responsibility of the caller to maintain that the data written is the same as the layout provided which arena used to reserve memory for.
 ///
 /// For this reason, no specific Drop implementation is needed. Instead, we rely on memtables to implement Drop to know when an arena can be deallocated.
-pub(crate) struct Arena {
+pub struct Arena {
     current_chunk: AtomicPtr<Chunk>,
     chunks: Mutex<Vec<Box<Chunk>>>,
     allocated_bytes: AtomicUsize,
@@ -80,7 +138,7 @@ pub(crate) struct Arena {
 }
 
 impl Arena {
-    pub(crate) fn new(policy: ArenaSize, allocator: Allocator) -> Self {
+    pub fn new(policy: ArenaSize, allocator: Allocator) -> Self {
         let policy = policy.to_policy();
 
         let heap = unsafe { allocator.allocate(policy.block_size) };
@@ -130,7 +188,7 @@ impl Arena {
 
     // NOTE: I've made the closure unsafe and it is up to the caller to ensure that the Layout and write to the pointer are correct.
     #[inline(always)]
-    pub(crate) unsafe fn alloc_raw(&self, layout: Layout) -> NonNull<u8> {
+    pub unsafe fn alloc_raw(&self, layout: Layout) -> NonNull<u8> {
         //
 
         loop {
@@ -177,10 +235,7 @@ impl Arena {
     }
 
     #[inline(always)]
-    pub(crate) unsafe fn alloc_raw_fallback(
-        &self,
-        layout: Layout,
-    ) -> Result<NonNull<u8>, ArenaError> {
+    pub unsafe fn alloc_raw_fallback(&self, layout: Layout) -> Result<NonNull<u8>, ArenaError> {
         //
 
         loop {
@@ -280,13 +335,13 @@ impl Arena {
     }
 
     #[inline(always)]
-    pub(crate) fn memory_used(&self) -> usize {
+    pub fn memory_used(&self) -> usize {
         let used = self.memory_used.load(Ordering::Relaxed);
         used
     }
 
     #[inline]
-    pub(crate) fn get_current_init_slice(&self) -> &[u8] {
+    pub fn get_current_init_slice(&self) -> &[u8] {
         let chunk = self.get_chunk();
 
         let bump = chunk.get_bump();
@@ -294,7 +349,7 @@ impl Arena {
         unsafe { &*slice_from_raw_parts(chunk.mem.as_ptr(), bump) }
     }
 
-    pub(crate) fn print_address(&self) {
+    pub fn print_address(&self) {
         println!(
             "arena current address: {:p}",
             self.current_chunk.load(Ordering::Relaxed)
@@ -304,7 +359,7 @@ impl Arena {
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::allocator::{Allocator, SystemAllocator};
+    use crate::allocator::{Allocator, SystemAllocator};
 
     use super::*;
     use std::thread::{self};

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+mem = { path = "../mem" }
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
