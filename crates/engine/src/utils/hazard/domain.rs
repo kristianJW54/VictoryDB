@@ -3,29 +3,87 @@
 //
 //
 //
+// DOCS: Describe global here and document
 //
 //
 //
 //
 
-use std::sync::OnceLock;
+// We want to be able to statically create unique domains using a Singleton pattern as a trait
+// with a macro to generate unique domain instances based on Jon Gjongset's implementation:
+// https://github.com/jonhoo/hazard/blob/master/src/domain.rs
 
-unsafe trait Family {}
+pub unsafe trait Singleton {}
 
-struct Global;
-unsafe impl Family for Global {}
-
-// Single static instance of HzdDomain<Global>
+// Macro to create unique static domain instances
 //
-fn make_global() -> &'static HzdDomain<Global> {
-    static GLOBAL_DOMAIN: OnceLock<HzdDomain<Global>> = OnceLock::new();
-    GLOBAL_DOMAIN.get_or_init(|| HzdDomain {
-        _family: std::marker::PhantomData,
-    })
+
+#[macro_export]
+macro_rules! static_unique_domain {
+    ($v:vis static $domain:ident: HzdDomain<$family:ident>) => {
+        #[allow(non_snake_case)]
+        mod $domain {
+            pub struct $family {
+                _inner: (),
+            }
+            // Safety: $family can only be constructed by this module, since it contains private members
+            unsafe impl $crate::utils::hazard::domain::Singleton for $family {}
+            pub static $domain: $crate::utils::hazard::domain::HzdDomain<$family> = $crate::utils::hazard::domain::HzdDomain::new(&$family {
+                _inner: (),
+            });
+        }
+        #[allow(unused_imports)]
+        $v use $domain::$family;
+        #[allow(unused_imports)]
+        $v use $domain::$domain;
+    }
 }
 
-pub(crate) struct HzdDomain<F: Family> {
-    _family: std::marker::PhantomData<F>,
+#[non_exhaustive]
+pub struct Global;
+impl Global {
+    const fn new() -> Self {
+        Global
+    }
 }
 
-impl HzdDomain<Global> {}
+unsafe impl Singleton for Global {}
+
+static GLOBAL_DOMAIN: HzdDomain<Global> = HzdDomain::new(&Global::new());
+
+pub struct HzdDomain<F> {
+    hazard_pointers: HazPtrRecs,
+    // Will have the retired list
+    family: std::marker::PhantomData<F>,
+    // Meta data...
+}
+
+impl<F> HzdDomain<F> {
+    pub const fn new(family: &F) -> Self {
+        Self {
+            hazard_pointers: HazPtrRecs { _inner: () },
+            family: std::marker::PhantomData,
+        }
+    }
+}
+
+// Hazard Pointer Records which is the Linked List of HzdPtrRec which are the containers for hazard pointers to load into and protect object
+// pointers in
+
+pub struct HazPtrRecs {
+    _inner: (),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn happy_families() {
+        static_unique_domain!(static TEST: HzdDomain<Test>);
+
+        struct SomeDataStructure {
+            domain: &'static HzdDomain<Test>,
+        }
+    }
+}
