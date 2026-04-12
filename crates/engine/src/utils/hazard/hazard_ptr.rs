@@ -1,47 +1,26 @@
-// We need a hazard ptr
-
-use std::marker::PhantomData;
-use std::sync::OnceLock;
-
-// Owner of this hazard pointer is telling all threads:
-// As long as this ptr points to Object T, do not reclaim
-struct HzdPtr<'domain, D = Global> {
-    hazard: &'domain HzdPtrRecord,
-    _data: PhantomData<D>,
-    _lifetime: PhantomData<&'domain ()>,
+//
+//
+//
+//
+//
+//
+// -  A hazard pointer is a single-writer multi-reader pointer that can be owned by at most one
+//      thread at any time. Only the owner of the hazard pointer can set its value, while any
+//      number of threads may read its value. The owner thread sets the value of a hazard
+//      pointer to point to an object in order to indicate to concurrent threads — that may delete
+//      such an object — that the object is not yet safe to delete
+//
+// -  A hazard pointer belongs to exactly one domain
+//
+struct HzdPtr {
+    hazard: HzdPtrRec
+    domain: &'domain Domain
 }
 
-struct HzdPtrRecord {}
+impl HzdPtr {
 
-//
-//
-//
-//
-// Domains
-// We can have multiple domains, each with its own hazard pointers and retired objects
-// To do this threads must
+    pub(crate) fn make_hazard_ptr() -> Self {
 
-//
-// Domain manages a set of hazard pointers and set of retired objects
-
-pub(crate) struct Global;
-impl Global {
-    fn new() -> Self {
-        Global
     }
-}
 
-pub(crate) fn init_global_domain() -> &'static HzdDomain<Global> {
-    static SHARED_DOMAIN: OnceLock<HzdDomain<Global>> = OnceLock::new();
-    SHARED_DOMAIN.get_or_init(|| HzdDomain::new())
-}
-
-pub(crate) struct HzdDomain<T> {
-    _data: PhantomData<T>,
-}
-
-impl<T> HzdDomain<T> {
-    fn new() -> Self {
-        Self { _data: PhantomData }
-    }
 }
