@@ -1,6 +1,3 @@
-use mem::allocator::Allocator;
-use mem::arena::Arena;
-
 mod column_family;
 mod db;
 mod iterator;
