@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 // - A thread observes newer epochs only by UNPINNING and PINNING again.
 //
 // So all threads must have observed the current global epoch.
+//
 
 pub(crate) struct Global {
     // NOTE: ThreadList -> Mutex<Vec<Thread>>? Would prefer lock-free but

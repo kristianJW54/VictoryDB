@@ -43,12 +43,86 @@ impl<'domain, Global> HzdPtr<'domain, Global> {
         }
     }
 
+    /*
+
+    1. First we get the pointer from the given AtomicPtr<T> as relaxed because we will double-check in the loop
+
+    2. We then loop and try_protect() the pointer, also giving the src AtomicPtr<T> to compare against
+
+    - From folly/synchronization/HazptrHolder.h
+
+    template <typename T, typename Func>
+      FOLLY_ALWAYS_INLINE T* protect(const Atom<T*>& src, Func f) noexcept {
+        T* ptr = src.load(std::memory_order_relaxed);
+        while (!try_protect(ptr, src, f)) {
+          /* Keep trying */
+        }
+        return ptr;
+      }
+
+    - From haphazard//src/hazard.rs
+        + In Rust world, the HapHazard library has a protect() method which calls protect_ptr() but i'm assuming
+          that the let(ptr, _proof) <- Signature here makes the compiler check the proof via signature so the lifetime is the same as 'l
+
+    pub unsafe fn protect<'l, T>(&'l mut self, src: &'_ AtomicPtr<T>) -> Option<&'l T>
+        where
+            T: Sync,
+            F: 'static,
+        {
+            // NOTE: The type ascription here ensures that `protect_ptr` indeed returns a lifetime of
+            // `'l` as we expect. It is a no-op, but will catch cases where `protect_ptr` changes in
+            // the future.
+            let (ptr, _proof): (_, PhantomData<&'l T>) = self.protect_ptr(src)?;
+            Some(unsafe { ptr.as_ref() })
+        }
+
+    3. In trying to protect ptr we must use a fence and acquire store
+
+    template <typename T, typename Func>
+      FOLLY_ALWAYS_INLINE bool try_protect(
+          T*& ptr, const Atom<T*>& src, Func f) noexcept {
+        /* Filtering the protected pointer through function Func is useful
+           for stealing bits of the pointer word */
+        auto p = ptr;
+        reset_protection(f(p));
+        /*** Full fence ***/ folly::asymmetric_thread_fence_light(
+            std::memory_order_seq_cst);
+        ptr = src.load(std::memory_order_acquire);
+        if (FOLLY_UNLIKELY(p != ptr)) {
+          reset_protection();
+          return false;
+        }
+        return true;
+      }
+
+
+    */
+
     pub fn protect<'hazard_object, T>(
         &'hazard_object mut self,
-        ptr: &'_ AtomicPtr<T>,
+        src: &'_ AtomicPtr<T>,
     ) -> Option<&'hazard_object T> {
-        let r = ptr.load(std::sync::atomic::Ordering::Relaxed);
+        // Logic
+        //
+        // Load the given AtomicPtr<T> into the hazard pointer
+        // To do so we must first load the AtomicPtr<T> to get the stored ptr
+        // Then we need to store the ptr in the hazard pointer
+        // And load the pointer again to check that the ptr hasn't changed
+
+        let mut ptr = src.load(std::sync::atomic::Ordering::Relaxed);
+        loop {
+            match self.try_protect(ptr, src) {
+                _ => break,
+            }
+        }
+
+        //
+        let r = src.load(std::sync::atomic::Ordering::Relaxed);
         unsafe { Some(&*r) }
+    }
+
+    fn try_protect<T>(&mut self, ptr: *mut T, src: &'_ AtomicPtr<T>) -> Option<()> {
+        todo!()
     }
 }
 
