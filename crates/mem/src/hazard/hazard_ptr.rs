@@ -52,7 +52,7 @@ impl<'domain, Global> HzdPtr<'domain, Global> {
     }
 }
 
-// TODO: Implement protect_ptr()
+// TODO: Implement the protect stack
 
 impl<'domain, D> Drop for HzdPtr<'domain, D> {
     fn drop(&mut self) {
