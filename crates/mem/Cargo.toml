@@ -3,4 +3,11 @@ name = "mem"
 version.workspace = true
 edition.workspace = true
 
+[features]
+loom = ["dep:loom"]
+
 [dependencies]
+loom = { workspace = true, optional = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

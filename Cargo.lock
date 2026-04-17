@@ -99,6 +99,9 @@ dependencies = [
 [[package]]
 name = "mem"
 version = "0.1.0"
+dependencies = [
+ "loom",
+]
 
 [[package]]
 name = "memchr"
