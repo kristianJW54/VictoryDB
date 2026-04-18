@@ -233,9 +233,9 @@ impl<F> HzdDomain<F> {
         // debug_assert_eq!(core::ptr::null::<HazPtrRec>() as usize, 0);
 
         loop {
-            let head = self.hazard_pointers.avail_head.load(Ordering::Acquire);
-            if head.is_null() {
-                return (head, 0);
+            let avail_head = self.hazard_pointers.avail_head.load(Ordering::Acquire);
+            if avail_head.is_null() {
+                return (avail_head, 0);
             }
 
             // Here we want to try and get a lock on the head ptr with a LOCK_BIT
@@ -252,9 +252,12 @@ impl<F> HzdDomain<F> {
             if locked.addr() & LOCK_BIT == 0 {
                 // We have the lock and can proceed safely
                 //
+                // We pass in the original head_avail which is the untagged ptr so we don't need to mask out the LOCK_BIT
+                // and because the locked ptr is still in self.hazard_pointers.avail_head, we can safely traverse.
+                // Once we're done, we will store::release back into self.hazard_pointers.avail_head which will unlock
+                let (_, n) = unsafe { self.try_acquire_available_locked::<N>(avail_head) };
+                debug_assert!(n >= 1, "Head available was not null");
                 //
-                // NOTE: Do we need to unlock the ptr?
-                // self.hazard_pointers.avail_head.fetch_and(!LOCK_BIT, Ordering::Release);
                 //
             } else {
                 // The head is locked, we need to wait for it to be unlocked
@@ -271,6 +274,73 @@ impl<F> HzdDomain<F> {
             break;
         }
 
+        todo!()
+    }
+
+    /// #SAFETY:
+    ///
+    /// The caller must ensure that the `ptr` is a valid `HzdPtrRec` pointer and that the caller
+    /// has the lock on the `avail_head` before calling this function.
+    unsafe fn try_acquire_available_locked<const N: usize>(
+        &self,
+        ptr: *const HzdPtrRec,
+    ) -> (*const HzdPtrRec, usize) {
+        // We want to traverse the available_next on the HzdPtrRec
+
+        // Explanation
+        //
+        // We want to fill an array of 4
+        // We try to get available HzdPtrRec's from the available_next() in Records but it only has 2
+        // So we have to allocate 2 in order to fill the array. (The newly allocated rec's don't immediately go in the available_next but they do go in the main linked list)
+        //
+        // Iteration 1:
+        // + available_next --------> A --------> B --------> null
+        //                       Head ^
+        //                            | -> rec
+        //                            | Tail = Head
+        //                            +---> Head available_next
+        //
+        // Iteration 2:
+        // + available_next --------> A --------> B --------> null
+        //                                   Head ^
+        //                                        | -> rec
+        //                                        | Tail = Head
+        //                                        +---> Head available_next
+        //
+        // Iteration 3:
+        // + available_next --------> A --------> B --------> null
+        //                                                 Head ^
+        //                                                      | -> rec
+        //                                                      | Tail = Head
+        //                                                      +---> Head available_next
+        //
+        // Iteration 4:
+        // + available_next --------> A --------> B --------> null
+        //                                                 Head ^
+        //                                                      |
+        //                                                      +
+        //                                                      C -> acquire_new()
+        //                                                 Tail ^
+        //                                                      | -> rec
+        //                                                      | Tail = rec
+        //                                                      + ----> available_next
+        //
+        // Iteration 5:
+        // + available_next --------> A --------> B --------> null
+        //                                                 Head ^
+        //                                                      |
+        //                                                      +
+        //                                                      C --------> D --> acquire_new()
+        //                                                             Tail ^
+        //                                                                  | -> rec
+        //                                                                  | Tail = rec
+        //                                                                  + ----> available_next
+        //
+        //
+        // End result: [&HzdPtrRec, 4] = A --> B --> C --> D
+        //
+        // These are all on the head linked list but will be pushed back into available list once they are no longer protecting anything
+        //
         todo!()
     }
 }
@@ -361,5 +431,19 @@ mod tests {
         let a = atom.fetch_or(LOCK_BIT, Ordering::Acquire);
         let n = a.addr() & LOCK_BIT != 0;
         println!("we are locked? {:?}", n);
+    }
+
+    #[test]
+    fn array_map() {
+        // Example of using array map to collect items into array with closure
+        let mut i = 0;
+        let r = [(); 3].map(|_| {
+            i += 1;
+            i
+        });
+
+        for (i, v) in r.into_iter().enumerate() {
+            assert_eq!(v, i + 1);
+        }
     }
 }
