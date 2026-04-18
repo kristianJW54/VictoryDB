@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::hazard::hazard_ptr::HzdPtrRec;
 
+const LOCK_BIT: usize = 1;
+
 // Make AtomicPtr usable with loom API.
 trait WithMut<T> {
     fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R;
@@ -238,7 +240,32 @@ impl<F> HzdDomain<F> {
 
             // Here we want to try and get a lock on the head ptr with a LOCK_BIT
 
-            // We can short circuit if self.hazard_pointers.next_available is null()
+            // We can use fetch_or() which gives us back the original ptr value and uses map_addr() to tag the usize bits while preserving provenance
+            // this is part of the strong provenance API in rust
+            // By comparing the original ptr we get back with the LOCK_BIT we can see if someone else has the lock because the return value will
+            // have the LOCK_BIT set if it was already locked whereas if we are the first to lock the original ptr will be returned without the LOCK_BIT set
+            let locked = self
+                .hazard_pointers
+                .avail_head
+                .fetch_or(LOCK_BIT, Ordering::Acquire);
+
+            if locked.addr() & LOCK_BIT == 0 {
+                // We have the lock and can proceed safely
+                //
+                //
+                // NOTE: Do we need to unlock the ptr?
+                // self.hazard_pointers.avail_head.fetch_and(!LOCK_BIT, Ordering::Release);
+                //
+            } else {
+                // The head is locked, we need to wait for it to be unlocked
+                // HapHazard uses this:
+                #[cfg(not(any(loom, feature = "std")))]
+                core::hint::spin_loop();
+                #[cfg(any(loom, feature = "std"))]
+                crate::sync::yield_now();
+
+                //
+            }
 
             //
             break;
@@ -321,8 +348,18 @@ mod tests {
 
         let locked_ptr = hzdptr.map_addr(|ptr| ptr | LOCK_BIT);
 
-        println!("{:?}", locked_ptr.addr());
+        assert_eq!(locked_ptr.addr(), 1);
 
-        println!("{:?}", hzdptr.addr());
+        // We can also use AtomicPtr::fetch_or()
+
+        let atom = AtomicPtr::new(hzdptr);
+
+        // Lock the atom
+        let o = atom.fetch_or(LOCK_BIT, Ordering::Acquire);
+        println!("were we locked? {:?}", o.addr() & LOCK_BIT != 0);
+
+        let a = atom.fetch_or(LOCK_BIT, Ordering::Acquire);
+        let n = a.addr() & LOCK_BIT != 0;
+        println!("we are locked? {:?}", n);
     }
 }
