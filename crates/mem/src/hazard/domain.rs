@@ -7,20 +7,57 @@
 //
 //
 //
-//
-
+/// ## Reclamation
+///
+/// Domains are the coordination mechanism used for reclamation. When an object is retired into a
+/// domain, the retiring thread will (sometimes) scan the domain for objects that are now safe to
+/// reclaim (i.e., drop). Objects that cannot yet be reclaimed because there are active readers are
+/// left in the domain for a later retire to check again. This means that there is generally a
+/// delay between when an object is retired (i.e., marked as deleted) and when it is actually
+/// reclaimed (i.e., [`drop`](core::mem::drop) is called). And if there are no more retires, the
+/// objects may not be reclaimed until the owning domain is itself dropped.
+///
+///
 // We want to be able to statically create unique domains using a Singleton pattern as a trait
 // with a macro to generate unique domain instances based on Jon Gjongset's implementation:
 // https://github.com/jonhoo/hazard/blob/master/src/domain.rs
-
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::hazard::hazard_ptr::HzdPtrRec;
+
+// Make AtomicPtr usable with loom API.
+trait WithMut<T> {
+    fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R;
+}
+impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
+    fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R {
+        f(self.get_mut())
+    }
+}
 
 pub unsafe trait Singleton {}
 
 // Macro to create unique static domain instances
 //
+#[macro_export]
+macro_rules! unique_domain {
+    () => {{
+        fn create_domain() -> Domain<impl Singleton> {
+            use ::core::sync::atomic::{AtomicBool, Ordering};
+            struct UniqueFamily;
+            // Safety: nowhere else can construct an instance of UniqueFamily to pass to
+            // Domain::new, and we protect the construction by the `USED` boolean.
+            unsafe impl Singleton for UniqueFamily {}
+            static USED: AtomicBool = AtomicBool::new(false);
+            if USED.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                Domain::new(&UniqueFamily)
+            } else {
+                panic!("`unique_domain!` macro cannot be executed more than once to maintain the `Singleton` constraints.")
+            }
+        }
+        create_domain()
+    }};
+}
 
 #[macro_export]
 macro_rules! static_unique_domain {
@@ -137,13 +174,13 @@ impl<F> HzdDomain<F> {
 
     // Acquire new HzdRec and insert it into the linked list
 
-    pub fn acquire_new_rec(&self) -> &HzdPtrRec {
+    pub(super) fn acquire_new_rec(&self) -> &HzdPtrRec {
         // First build the HzdPtrRec
-        let rec = Box::new(HzdPtrRec {
+        let rec = Box::into_raw(Box::new(HzdPtrRec {
             ptr: AtomicPtr::new(core::ptr::null_mut()),
             next: AtomicPtr::new(core::ptr::null_mut()),
             available: AtomicPtr::new(core::ptr::null_mut()),
-        });
+        }));
 
         // Insert into the linked list
         //
@@ -154,7 +191,56 @@ impl<F> HzdDomain<F> {
         //
 
         loop {
-            // TODO: Finish
+            // NOTE: Not sure why this was used in HapHazard as it is supposed to help with Loom
+            unsafe { &mut *rec }.next.with_mut(|p| *p = head);
+
+            match self.hazard_pointers.head.compare_exchange_weak(
+                head,
+                rec,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.hazard_pointers.count.fetch_add(1, Ordering::SeqCst);
+                    break unsafe { &*rec };
+                }
+                Err(changed_head) => {
+                    head = changed_head;
+                }
+            }
+        }
+    }
+
+    pub(super) fn acquire(&self) -> &HzdPtrRec {
+        self.acquire_many::<1>()[0]
+    }
+
+    pub(super) fn acquire_many<const N: usize>(&self) -> [&HzdPtrRec; N] {
+        //
+        //
+        // First try to acquire available
+        // let (mut head, n) = self.try_acquire_available::<N>();
+        // assert!(n <= N);
+
+        todo!()
+    }
+
+    fn try_acquire_available<const N: usize>(&self) -> (*const HzdPtrRec, usize) {
+        debug_assert!(N >= 1);
+        // NOTE: HapHazard does this debug_assert_eq! and I don't know why yet
+        // debug_assert_eq!(core::ptr::null::<HazPtrRec>() as usize, 0);
+
+        loop {
+            let head = self.hazard_pointers.avail_head.load(Ordering::Acquire);
+            if head.is_null() {
+                return (head, 0);
+            }
+
+            // Here we want to try and get a lock on the head ptr with a LOCK_BIT
+
+            // We can short circuit if self.hazard_pointers.next_available is null()
+
+            //
             break;
         }
 
@@ -190,5 +276,53 @@ mod tests {
         // struct SomeOtherDataStructure {
         //     domain: &'static HzdDomain<Test>,
         // }
+    }
+
+    #[test]
+    fn test_acquire_new_rec() {
+        let rec = GLOBAL_DOMAIN.acquire_new_rec();
+        assert_eq!(
+            GLOBAL_DOMAIN.hazard_pointers.count.load(Ordering::Relaxed),
+            1
+        );
+        println!("{:?}", rec);
+    }
+
+    #[test]
+    fn ptr_locking() {
+        const LOCK_BIT: usize = 1;
+
+        let _ = GLOBAL_DOMAIN.acquire_new_rec();
+
+        let hzdptr = GLOBAL_DOMAIN
+            .hazard_pointers
+            .avail_head
+            .load(Ordering::Acquire);
+
+        assert_eq!(hzdptr.addr(), 0);
+
+        // NOTE: We need to make sure when locking ptr we keep provenance
+        //
+        // https://doc.rust-lang.org/std/ptr/index.html#provenance
+        //
+        // "pointers need to somehow be more than just their addresses: they must have provenance."
+        // - A pointer value in Rust semantically contains the following information:
+        //     + The address it points to, which can be represented by a usize.
+        //     + The provenance it has, defining the memory it has permission to access.
+        //       Provenance can be absent, in which case the pointer does not have permission to access any memory.
+        //
+        // From this discussion, it becomes very clear that a usize cannot accurately represent a pointer, and converting from a pointer
+        // to a usize is generally an operation which only extracts the address.
+        // Converting this address back into pointer requires somehow answering the question: which provenance should the resulting pointer have?
+        //
+        // https://doc.rust-lang.org/std/ptr/index.html#using-strict-provenance
+        // Using strict provenance methods we can create a tagged pointer without having to do wrapping_add() tricks
+        //
+
+        let locked_ptr = hzdptr.map_addr(|ptr| ptr | LOCK_BIT);
+
+        println!("{:?}", locked_ptr.addr());
+
+        println!("{:?}", hzdptr.addr());
     }
 }

@@ -6,6 +6,7 @@ use std::ptr;
 use std::sync::atomic::Ordering;
 use std::{marker::PhantomData, ptr::NonNull, sync::atomic::AtomicPtr};
 
+#[derive(Debug)]
 pub(super) struct HzdPtrRec {
     pub(super) ptr: AtomicPtr<u8>,
     pub(super) next: AtomicPtr<HzdPtrRec>,
