@@ -217,76 +217,15 @@ impl<F> HzdDomain<F> {
         self.acquire_many::<1>()[0]
     }
 
+    // Acquire_many returns an array of HzdPtrRecs
+    // The reason we return and array and not the head of the acquired linked list is because the caller can do this:
+    // hp[0].protect(ptr1);
+    // hp[1].protect(ptr2);
+    // hp[2].protect(ptr3);
+    //
     pub(super) fn acquire_many<const N: usize>(&self) -> [&HzdPtrRec; N] {
         //
         //
-        // First try to acquire available
-        // let (mut head, n) = self.try_acquire_available::<N>();
-        // assert!(n <= N);
-
-        todo!()
-    }
-
-    fn try_acquire_available<const N: usize>(&self) -> (*const HzdPtrRec, usize) {
-        debug_assert!(N >= 1);
-        // NOTE: HapHazard does this debug_assert_eq! and I don't know why yet
-        // debug_assert_eq!(core::ptr::null::<HazPtrRec>() as usize, 0);
-
-        loop {
-            let avail_head = self.hazard_pointers.avail_head.load(Ordering::Acquire);
-            if avail_head.is_null() {
-                return (avail_head, 0);
-            }
-
-            // Here we want to try and get a lock on the head ptr with a LOCK_BIT
-
-            // We can use fetch_or() which gives us back the original ptr value and uses map_addr() to tag the usize bits while preserving provenance
-            // this is part of the strong provenance API in rust
-            // By comparing the original ptr we get back with the LOCK_BIT we can see if someone else has the lock because the return value will
-            // have the LOCK_BIT set if it was already locked whereas if we are the first to lock the original ptr will be returned without the LOCK_BIT set
-            let locked = self
-                .hazard_pointers
-                .avail_head
-                .fetch_or(LOCK_BIT, Ordering::Acquire);
-
-            if locked.addr() & LOCK_BIT == 0 {
-                // We have the lock and can proceed safely
-                //
-                // We pass in the original head_avail which is the untagged ptr so we don't need to mask out the LOCK_BIT
-                // and because the locked ptr is still in self.hazard_pointers.avail_head, we can safely traverse.
-                // Once we're done, we will store::release back into self.hazard_pointers.avail_head which will unlock
-                let (_, n) = unsafe { self.try_acquire_available_locked::<N>(avail_head) };
-                debug_assert!(n >= 1, "Head available was not null");
-                //
-                //
-            } else {
-                // The head is locked, we need to wait for it to be unlocked
-                // HapHazard uses this:
-                #[cfg(not(any(loom, feature = "std")))]
-                core::hint::spin_loop();
-                #[cfg(any(loom, feature = "std"))]
-                crate::sync::yield_now();
-
-                //
-            }
-
-            //
-            break;
-        }
-
-        todo!()
-    }
-
-    /// #SAFETY:
-    ///
-    /// The caller must ensure that the `ptr` is a valid `HzdPtrRec` pointer and that the caller
-    /// has the lock on the `avail_head` before calling this function.
-    unsafe fn try_acquire_available_locked<const N: usize>(
-        &self,
-        ptr: *const HzdPtrRec,
-    ) -> (*const HzdPtrRec, usize) {
-        // We want to traverse the available_next on the HzdPtrRec
-
         // Explanation
         //
         // We want to fill an array of 4
@@ -340,8 +279,117 @@ impl<F> HzdDomain<F> {
         // End result: [&HzdPtrRec, 4] = A --> B --> C --> D
         //
         // These are all on the head linked list but will be pushed back into available list once they are no longer protecting anything
-        //
+
+        // First try to acquire available
+        debug_assert!(N >= 1);
+        let (mut head, n) = self.try_acquire_available::<N>();
+
+        assert!(n <= N);
+
+        // While loop
+
         todo!()
+    }
+
+    fn try_acquire_available<const N: usize>(&self) -> (*const HzdPtrRec, usize) {
+        debug_assert!(N >= 1);
+        // NOTE: HapHazard does this debug_assert_eq! and I don't know why yet
+        // debug_assert_eq!(core::ptr::null::<HazPtrRec>() as usize, 0);
+
+        loop {
+            let avail_head = self.hazard_pointers.avail_head.load(Ordering::Acquire);
+            if avail_head.is_null() {
+                return (avail_head, 0);
+            }
+
+            // Here we want to try and get a lock on the head ptr with a LOCK_BIT
+
+            // We can use fetch_or() which gives us back the original ptr value and uses map_addr() to tag the usize bits while preserving provenance
+            // this is part of the strong provenance API in rust
+            // By comparing the original ptr we get back with the LOCK_BIT we can see if someone else has the lock because the return value will
+            // have the LOCK_BIT set if it was already locked whereas if we are the first to lock the original ptr will be returned without the LOCK_BIT set
+            let locked = self
+                .hazard_pointers
+                .avail_head
+                .fetch_or(LOCK_BIT, Ordering::Acquire);
+
+            if locked.addr() & LOCK_BIT == 0 {
+                // We have the lock and can proceed safely
+                //
+                // We pass in the original head_avail which is the untagged ptr so we don't need to mask out the LOCK_BIT
+                // and because the locked ptr is still in self.hazard_pointers.avail_head, we can safely traverse.
+                // Once we're done, we will store::release back into self.hazard_pointers.avail_head which will unlock
+                let (ptr, n) = unsafe { self.try_acquire_available_locked::<N>(avail_head) };
+                debug_assert!(n >= 1, "Head available was not null");
+                debug_assert!(n <= N);
+                //
+                //
+                return (ptr, n);
+            } else {
+                // The head is locked, we need to wait for it to be unlocked
+                // HapHazard uses this:
+                #[cfg(not(any(loom, feature = "std")))]
+                core::hint::spin_loop();
+                #[cfg(any(loom, feature = "std"))]
+                crate::sync::yield_now();
+
+                //
+            }
+        }
+    }
+
+    /// #SAFETY:
+    ///
+    /// The caller must ensure that the `ptr` is a valid `HzdPtrRec` pointer and that the caller
+    /// has the lock on the `avail_head` before calling this function.
+    unsafe fn try_acquire_available_locked<const N: usize>(
+        &self,
+        stolen_head: *const HzdPtrRec,
+    ) -> (*const HzdPtrRec, usize) {
+        //
+        // We want to traverse the available_next on the HzdPtrRec for n elements we need or until next is null
+        // We've acquired a lock on the start of an available list so we can safely traverse it
+        //
+        // Global available list
+        // + head available --> A|LOCKED --> B --> C --> D --> E --> null
+        //          we lock here ^      n = 3            |
+        //                       |-----------------|--> next
+        //                     Head               Tail   ^ unlock and store next as new head back on global list
+        //
+        // New Global available list
+        // + head available --> C --> D --> E --> null
+        //
+        debug_assert!(N >= 1);
+
+        let mut tail = stolen_head;
+        let mut n = 1;
+
+        // SAFETY:
+        // The caller has the lock on `avail_head`, so `tail` is a valid `HzdPtrRec` pointer.
+        // Relaxed ordering because we hold the lock
+        let mut next = unsafe { &*tail }.available.load(Ordering::Relaxed);
+
+        while !next.is_null() && n < N {
+            //
+
+            debug_assert_eq!((next as usize) | LOCK_BIT, 0);
+            tail = next;
+
+            next = unsafe { &*tail }.available.load(Ordering::Relaxed);
+            n += 1;
+        }
+
+        // We need to store element after the end of our list we acquired back to the global list
+        self.hazard_pointers
+            .avail_head
+            .store(next, Ordering::Release);
+
+        // And we null the tail so it doesn't point to next
+        unsafe { &*tail }
+            .next
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+
+        (stolen_head, n)
     }
 }
 
