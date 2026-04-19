@@ -352,7 +352,7 @@ impl<F> HzdDomain<F> {
         //
         // Global available list
         // + head available --> A|LOCKED --> B --> C --> D --> E --> null
-        //          we lock here ^      n = 3            |
+        //          we lock here ^      n = 3      ^     |
         //                       |-----------------|--> next
         //                     Head               Tail   ^ unlock and store next as new head back on global list
         //
@@ -372,7 +372,7 @@ impl<F> HzdDomain<F> {
         while !next.is_null() && n < N {
             //
 
-            debug_assert_eq!((next as usize) | LOCK_BIT, 0);
+            debug_assert_eq!((next as usize) & LOCK_BIT, 0);
             tail = next;
 
             next = unsafe { &*tail }.available.load(Ordering::Relaxed);
@@ -386,7 +386,7 @@ impl<F> HzdDomain<F> {
 
         // And we null the tail so it doesn't point to next
         unsafe { &*tail }
-            .next
+            .available
             .store(std::ptr::null_mut(), Ordering::Relaxed);
 
         (stolen_head, n)
@@ -405,6 +405,8 @@ pub struct HazPtrRecs {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
 
     #[test]
@@ -493,5 +495,65 @@ mod tests {
         for (i, v) in r.into_iter().enumerate() {
             assert_eq!(v, i + 1);
         }
+    }
+
+    #[test]
+    fn acquire_available_two_threads() {
+        // Build simple fake linked list of 5 ints
+
+        fn link() -> *mut HzdPtrRec {
+            let p = Box::into_raw(Box::new(HzdPtrRec {
+                ptr: AtomicPtr::new(core::ptr::null_mut()),
+                next: AtomicPtr::new(core::ptr::null_mut()), // Fine for now as we'll only be using available for test here
+                available: AtomicPtr::new(core::ptr::null_mut()),
+            }));
+
+            p
+        }
+
+        let head = link();
+        let mut next = head;
+
+        let mut list_size = 1;
+
+        for _ in 0..4 {
+            let new = link();
+            unsafe { &*next }.available.store(new, Ordering::Relaxed);
+            list_size += 1;
+            next = new;
+        }
+
+        unsafe { &*next }
+            .available
+            .store(core::ptr::null_mut(), Ordering::Relaxed);
+
+        assert!(list_size == 5);
+
+        let domain = &GLOBAL_DOMAIN;
+        domain
+            .hazard_pointers
+            .avail_head
+            .store(head, Ordering::Relaxed);
+
+        // Spawn two threads which try to try_acquire_available::<3>()
+        // One thread should get the full array back and the other should only get 2
+
+        thread::scope(|t| {
+            let t1 = t.spawn(|| {
+                let (_, n) = domain.try_acquire_available::<3>();
+                n
+            });
+            let t2 = t.spawn(|| {
+                let (_, n2) = domain.try_acquire_available::<3>();
+                n2
+            });
+
+            let n = t1.join().unwrap();
+            let n2 = t2.join().unwrap();
+
+            assert_eq!((n + n2), 5);
+        })
+
+        //
     }
 }
