@@ -6,6 +6,8 @@ use std::ptr;
 use std::sync::atomic::Ordering;
 use std::{marker::PhantomData, ptr::NonNull, sync::atomic::AtomicPtr};
 
+use crate::hazard::domain::{Global, HzdDomain};
+
 #[derive(Debug)]
 pub(super) struct HzdPtrRec {
     pub(super) ptr: AtomicPtr<u8>,
@@ -37,29 +39,35 @@ impl HzdPtrRec {
 
 // Hazard Pointer is a container object which acts as a handle to an inner container which persists in a domains linked list
 // the inner container is a record which holds the pointer to the protected object
-struct HzdPtr<'domain, D> {
-    hazard: HzdPtrRec,
-    // domain: &'domain D,
-    _f: PhantomData<D>,
-    _l: PhantomData<&'domain ()>,
-    ptr: AtomicPtr<u8>,
+struct HzdPtr<'domain, D = Global> {
+    hazard: &'domain HzdPtrRec,
+    domain: &'domain HzdDomain<D>,
+}
+
+impl Default for HzdPtr<'static, Global> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HzdPtr<'static, Global> {
+    pub fn new() -> Self {
+        Self::new_in_domain(HzdDomain::global())
+    }
+    //
+    // TODO: Include a many_in_domain as future API if needed
+    //
 }
 
 impl<'domain, D> HzdPtr<'domain, D> {
-    pub(crate) fn make_hazard_ptr() -> Self {
+    pub fn new_in_domain(domain: &'domain HzdDomain<D>) -> Self {
         Self {
-            // NOTE: To be replaced by an actual call to domain to retrieve a valid HzdRec (or new)
-            hazard: HzdPtrRec {
-                ptr: AtomicPtr::new(ptr::null_mut()),
-                next: AtomicPtr::new(ptr::null_mut()),
-                available: AtomicPtr::new(ptr::null_mut()),
-            },
-            _f: PhantomData,
-            _l: PhantomData,
-            ptr: AtomicPtr::new(std::ptr::null_mut()),
+            hazard: domain.acquire(),
+            domain,
         }
     }
 
+    // ---------- Protect() ------------//
     /*
 
     1. First we get the pointer from the given AtomicPtr<T> as relaxed because we will double-check in the loop
@@ -196,17 +204,6 @@ impl<'domain, D> HzdPtr<'domain, D> {
     }
 }
 
-impl<'domain, D> Drop for HzdPtr<'domain, D> {
-    fn drop(&mut self) {
-        unsafe {
-            let p = self.ptr.load(std::sync::atomic::Ordering::Relaxed);
-            if !p.is_null() {
-                drop(Box::from_raw(p as *mut u8));
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -214,20 +211,7 @@ mod tests {
 
     #[test]
     fn perfect_world() {
-        // We want to be able to take our object A
-        let mut a = AtomicPtr::new(Box::into_raw(Box::new(10i32)));
 
-        // Then we want to be able to protect object A with a hazard pointer
-        let mut hp: HzdPtr<crate::hazard::domain::Global> = HzdPtr::make_hazard_ptr();
-        let ptr: &i32 = unsafe { hp.protect(&a).expect("Non Null") };
-
-        println!("{:?}", ptr);
-
-        // If we drop the hazard pointer, the protected object should only be reclaimed if safe
-        // we should not be able to deference the hazard pointer after it has been dropped
-        drop(hp);
-
-        // Compile error
-        // let _ = *ptr;
+        // Create the API guide we want to use
     }
 }

@@ -168,6 +168,23 @@ pub struct HzdDomain<F> {
     // Meta data...
 }
 
+#[cfg(miri)]
+extern "Rust" {
+    fn miri_static_root(ptr: *const u8);
+}
+
+impl HzdDomain<Global> {
+    /// Get a handle to the singleton [global domain](Global).
+    pub fn global() -> &'static Self {
+        #[cfg(miri)]
+        unsafe {
+            miri_static_root(&GLOBAL_DOMAIN as *const _ as *const u8);
+        };
+
+        &GLOBAL_DOMAIN
+    }
+}
+
 impl<F> HzdDomain<F> {
     #[cfg(not(loom))]
     new!(const fn new);
@@ -284,11 +301,29 @@ impl<F> HzdDomain<F> {
         debug_assert!(N >= 1);
         let (mut head, n) = self.try_acquire_available::<N>();
 
+        let mut tail: *const HzdPtrRec = core::ptr::null_mut();
+
         assert!(n <= N);
 
-        // While loop
+        [(); N].map(|_| {
+            if !head.is_null() {
+                tail = head;
 
-        todo!()
+                let hzd_rec = unsafe { &*head };
+
+                head = hzd_rec.available.load(Ordering::Relaxed);
+                hzd_rec
+            } else {
+                let next = self.acquire_new_rec();
+                if !tail.is_null() {
+                    unsafe { &*tail }
+                        .available
+                        .store(next as *const _ as *mut _, Ordering::Relaxed);
+                }
+                tail = next as *const _;
+                next
+            }
+        })
     }
 
     fn try_acquire_available<const N: usize>(&self) -> (*const HzdPtrRec, usize) {
@@ -555,5 +590,36 @@ mod tests {
         })
 
         //
+    }
+
+    #[test]
+    fn acquire_many_not_null() {
+        // Build simple fake linked list of 5 ints
+
+        fn link() -> *mut HzdPtrRec {
+            let p = Box::into_raw(Box::new(HzdPtrRec {
+                ptr: AtomicPtr::new(core::ptr::null_mut()),
+                next: AtomicPtr::new(core::ptr::null_mut()), // Fine for now as we'll only be using available for test here
+                available: AtomicPtr::new(core::ptr::null_mut()),
+            }));
+
+            p
+        }
+        let head = link();
+        let mut next = head;
+
+        // Build a small list which means acquire_new() must be used to fill the array
+
+        for _ in 0..1 {
+            let new = link();
+            unsafe { &*next }.available.store(new, Ordering::Relaxed);
+            next = new;
+        }
+
+        let acquired = GLOBAL_DOMAIN.acquire_many::<5>();
+
+        for _ in 0..acquired.len() {
+            assert!(!acquired[0].available.load(Ordering::Relaxed).is_null());
+        }
     }
 }
