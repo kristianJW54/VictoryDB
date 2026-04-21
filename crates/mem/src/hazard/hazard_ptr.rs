@@ -39,9 +39,9 @@ impl HzdPtrRec {
 
 // Hazard Pointer is a container object which acts as a handle to an inner container which persists in a domains linked list
 // the inner container is a record which holds the pointer to the protected object
-struct HzdPtr<'domain, D = Global> {
+pub struct HzdPtr<'domain, D = Global> {
     hazard: &'domain HzdPtrRec,
-    domain: &'domain HzdDomain<D>,
+    pub(super) domain: &'domain HzdDomain<D>,
 }
 
 impl Default for HzdPtr<'static, Global> {
@@ -126,7 +126,6 @@ impl<'domain, D> HzdPtr<'domain, D> {
 
     We can follow HapHazard here and make use of Option and Result for control flow branching
 
-
     - From haphazard//src/hazard.rs
 
     -> First method which handles control flow and loop
@@ -148,7 +147,10 @@ impl<'domain, D> HzdPtr<'domain, D> {
 
     */
 
-    /// This high method's main purpose is to ensure that the compiler checks the type signature of the lifetime
+    /// protect() takes an Object T and attempts to insert it into a HzdPtrRec which has the effect of protecting the Object from reclemataion as
+    /// other threads can see the Object in the HzdPtrRec in the Domain and will NOT reclaim whilst the HzdPtr is active
+    ///
+    /// The method seems to be a no-op but the main purpose is to ensure that the compiler checks the type signature of the lifetime
     /// of the ptr we are tyring to protect
     ///
     /// It calls into two lower level methods
@@ -200,7 +202,24 @@ impl<'domain, D> HzdPtr<'domain, D> {
         // Protect the ptr (we will only reset if we detect change)
         self.hazard.protect(ptr as *mut u8);
 
-        Ok(None)
+        super::asymmetric_light_barrier();
+
+        let re_check_src = src.load(Ordering::Acquire);
+
+        if !core::ptr::eq(ptr, re_check_src) {
+            self.hazard.reset();
+            Err(re_check_src)
+        } else {
+            Ok(NonNull::new(ptr).map(|ptr| (ptr, PhantomData)))
+        }
+    }
+}
+
+impl<T> Drop for HzdPtr<'_, T> {
+    fn drop(&mut self) {
+        self.hazard.reset();
+        // Domain release
+        todo!()
     }
 }
 

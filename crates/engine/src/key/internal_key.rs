@@ -224,7 +224,7 @@ impl<const N: usize> EphemeralKey<N> {
         // Use TLS buffer as fallback
         self._inner
             .set_external(total, unsafe { NonNull::dangling().as_mut() });
-        TCTX.with(|ctx| {
+        TCTX.with_borrow(|ctx| {
             ctx.inner_key_buf()
                 .with_inner_key(user_key, seq_no, op_type, f)
         })

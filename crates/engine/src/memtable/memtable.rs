@@ -121,6 +121,8 @@ impl<S: MemtableState> Memtable<S> {
 
 impl Memtable<Mutable> {
     //
+    // TODO: This should not be allowed as Mutable memtables should not be able to create more mutable memtables
+    // Called should do Memtable::new() and get mutable mem which would happen during a rotation
     pub(crate) fn new(
         id: MemID,
         arena_size: ArenaSize,
@@ -220,6 +222,7 @@ impl MemtableInner {
 
     // NOTE: If we insert direct we have to make sure that the internal key seq no is greater than the highest seq no so we don't fail on insert and alloc
     // A dead node
+    // TODO: We could create a fallback where if we need to we can use the TLS Ephemeral buffer to allocate the internal key and insert
     fn insert_direct(&self, user_key: &[u8], seq_no: u64, op_type: OperationType, value: &[u8]) {
         let user_key_len = user_key.len();
 
@@ -319,5 +322,9 @@ mod tests {
     fn mem_enum() {
         let mem = MemLifeCycle::Active;
         assert_eq!(mem as u8, 1);
+    }
+
+    fn testing_new() {
+        let mem = Memtable::<Mutable>::new_memtable();
     }
 }

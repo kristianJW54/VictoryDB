@@ -28,13 +28,15 @@ struct ThreadContext {
 //
 // 3. References must not escape the scope of mutation or the scope of the thread unless designed for.
 
+use std::cell::RefCell;
+
 thread_local! {
-    pub(crate) static TCTX: ThreadCtx = ThreadCtx::new()
+    pub(crate) static TCTX: RefCell<ThreadCtx> = RefCell::new(ThreadCtx::new())
 }
 
 pub(crate) fn thread_ctx<F, R>(f: F) -> R
 where
-    F: FnOnce(&ThreadCtx) -> R,
+    F: FnOnce(&RefCell<ThreadCtx>) -> R,
 {
     TCTX.with(|ctx| f(ctx))
 }

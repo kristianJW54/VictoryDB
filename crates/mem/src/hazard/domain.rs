@@ -201,13 +201,7 @@ impl<F> HzdDomain<F> {
             available: AtomicPtr::new(core::ptr::null_mut()),
         }));
 
-        // Insert into the linked list
-        //
-        // - Get head first
         let mut head = self.hazard_pointers.head.load(Ordering::Acquire);
-
-        // We need to loop as we try to CAS the current head with the new rec
-        //
 
         loop {
             // NOTE: Not sure why this was used in HapHazard as it is supposed to help with Loom
@@ -242,61 +236,6 @@ impl<F> HzdDomain<F> {
     //
     pub(super) fn acquire_many<const N: usize>(&self) -> [&HzdPtrRec; N] {
         //
-        //
-        // Explanation
-        //
-        // We want to fill an array of 4
-        // We try to get available HzdPtrRec's from the available_next() in Records but it only has 2
-        // So we have to allocate 2 in order to fill the array. (The newly allocated rec's don't immediately go in the available_next but they do go in the main linked list)
-        //
-        // Iteration 1:
-        // + available_next --------> A --------> B --------> null
-        //                       Head ^
-        //                            | -> rec
-        //                            | Tail = Head
-        //                            +---> Head available_next
-        //
-        // Iteration 2:
-        // + available_next --------> A --------> B --------> null
-        //                                   Head ^
-        //                                        | -> rec
-        //                                        | Tail = Head
-        //                                        +---> Head available_next
-        //
-        // Iteration 3:
-        // + available_next --------> A --------> B --------> null
-        //                                                 Head ^
-        //                                                      | -> rec
-        //                                                      | Tail = Head
-        //                                                      +---> Head available_next
-        //
-        // Iteration 4:
-        // + available_next --------> A --------> B --------> null
-        //                                                 Head ^
-        //                                                      |
-        //                                                      +
-        //                                                      C -> acquire_new()
-        //                                                 Tail ^
-        //                                                      | -> rec
-        //                                                      | Tail = rec
-        //                                                      + ----> available_next
-        //
-        // Iteration 5:
-        // + available_next --------> A --------> B --------> null
-        //                                                 Head ^
-        //                                                      |
-        //                                                      +
-        //                                                      C --------> D --> acquire_new()
-        //                                                             Tail ^
-        //                                                                  | -> rec
-        //                                                                  | Tail = rec
-        //                                                                  + ----> available_next
-        //
-        //
-        // End result: [&HzdPtrRec, 4] = A --> B --> C --> D
-        //
-        // These are all on the head linked list but will be pushed back into available list once they are no longer protecting anything
-
         // First try to acquire available
         debug_assert!(N >= 1);
         let (mut head, n) = self.try_acquire_available::<N>();
@@ -426,6 +365,17 @@ impl<F> HzdDomain<F> {
 
         (stolen_head, n)
     }
+
+    pub(super) fn release(&self, release_rec: &HzdPtrRec) {
+        assert!(release_rec.available.load(Ordering::Relaxed).is_null());
+        self.push_available(release_rec, release_rec)
+    }
+
+    pub(super) fn push_available(&self, head: &HzdPtrRec, tail: &HzdPtrRec) {
+        unimplemented!()
+    }
+
+    //
 }
 
 // Hazard Pointer Records which is the Linked List of HzdPtrRec which are the containers for hazard pointers to load into and protect object
