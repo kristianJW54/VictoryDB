@@ -38,10 +38,10 @@ const MAX_ARENA_BLOCK_SIZE: usize = 128 * MB;
 
 // Block sizes
 const TEST_ARENA_BLOCK_SIZE: usize = 10;
-const DEFAULT_ARENA_BLOCK_SIZE: usize = 2 * MB;
+const DEFAULT_ARENA_BLOCK_SIZE: usize = 4 * MB;
 const LARGE_ARENA_BLOCK_SIZE: usize = 8 * MB;
 const MEDIUM_ARENA_BLOCK_SIZE: usize = 4 * MB;
-const SMALL_ARENA_BLOCK_SIZE: usize = 1 * MB;
+const SMALL_ARENA_BLOCK_SIZE: usize = 2 * MB;
 
 pub enum ArenaSize {
     Custom(usize, usize),
@@ -138,8 +138,11 @@ pub struct Arena {
 }
 
 impl Arena {
-    pub fn new(policy: ArenaSize, allocator: Allocator) -> Self {
-        let policy = policy.to_policy();
+    pub fn new(policy: ArenaPolicy, allocator: Allocator) -> Self {
+        assert!(
+            policy.cap >= policy.block_size,
+            "Total capacity must be more than chunk size"
+        );
 
         let heap = unsafe { allocator.allocate(policy.block_size) };
         let chunk = Box::new(Chunk::new(heap));
@@ -367,7 +370,10 @@ mod tests {
     #[test]
     fn competing_allocs() {
         let arena = Arena::new(
-            ArenaSize::Default,
+            ArenaPolicy {
+                block_size: 2000,
+                cap: 64000,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -408,7 +414,10 @@ mod tests {
     #[test]
     fn arena_sizing() {
         let arena = Arena::new(
-            ArenaSize::Custom(10, 20),
+            ArenaPolicy {
+                block_size: 10,
+                cap: 20,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -432,7 +441,10 @@ mod tests {
     #[should_panic]
     fn alignment_bitwise() {
         let arena = Arena::new(
-            ArenaSize::Custom(10, 10),
+            ArenaPolicy {
+                block_size: 10,
+                cap: 10,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -459,7 +471,10 @@ mod tests {
     #[test]
     fn chunk_change() {
         let arena = Arena::new(
-            ArenaSize::Custom(10, 20),
+            ArenaPolicy {
+                block_size: 10,
+                cap: 20,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -496,7 +511,10 @@ mod tests {
     #[test]
     fn tower_and_bytes() {
         let arena = Arena::new(
-            ArenaSize::Custom(20, 20),
+            ArenaPolicy {
+                block_size: 20,
+                cap: 40,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 

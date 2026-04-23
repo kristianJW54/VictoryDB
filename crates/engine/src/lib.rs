@@ -3,8 +3,10 @@ mod db;
 mod iterator;
 mod key;
 mod memtable;
+mod options;
 mod range;
-pub mod tests;
 mod thread_ctx;
-pub mod utils;
 mod versioning;
+
+pub mod tests;
+pub mod utils;

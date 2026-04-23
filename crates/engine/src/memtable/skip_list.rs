@@ -796,7 +796,10 @@ mod tests {
     fn basic_node_layout() {
         //
         let arena = Arena::new(
-            ArenaSize::Custom(80, 160),
+            ArenaPolicy {
+                block_size: 80,
+                cap: 160,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -832,7 +835,10 @@ mod tests {
     #[test]
     fn level_access() {
         let arena = Arena::new(
-            ArenaSize::Custom(80, 160),
+            ArenaPolicy {
+                block_size: 80,
+                cap: 160,
+            },
             Allocator::System(SystemAllocator::new()),
         );
         let skip = SkipList::new(Arc::new(DefaultComparator {}), &arena);
@@ -883,7 +889,10 @@ mod tests {
     #[test]
     fn node_tower_height() {
         let arena = Arena::new(
-            ArenaSize::Custom(80, 160),
+            ArenaPolicy {
+                block_size: 80,
+                cap: 160,
+            },
             Allocator::System(SystemAllocator::new()),
         );
         let node = unsafe { Node::alloc(&arena, 1, 5, 2) };
@@ -901,7 +910,10 @@ mod tests {
     #[test]
     fn basic_search() {
         let arena = Arena::new(
-            ArenaSize::Custom(320, 640),
+            ArenaPolicy {
+                block_size: 320,
+                cap: 640,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -934,7 +946,10 @@ mod tests {
     #[test]
     fn basic_insert() {
         let arena = Arena::new(
-            ArenaSize::Custom(320, 640),
+            ArenaPolicy {
+                block_size: 320,
+                cap: 640,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -975,7 +990,10 @@ mod tests {
     #[test]
     fn direct_insert() {
         let arena = Arena::new(
-            ArenaSize::Custom(320, 640),
+            ArenaPolicy {
+                block_size: 320,
+                cap: 640,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -1063,7 +1081,10 @@ mod tests {
     #[test]
     fn basic_iter() {
         let arena = Arena::new(
-            ArenaSize::Custom(320, 640),
+            ArenaPolicy {
+                block_size: 320,
+                cap: 640,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 
@@ -1101,7 +1122,10 @@ mod tests {
     #[test]
     fn basic_range() {
         let arena = Arena::new(
-            ArenaSize::Custom(320, 640),
+            ArenaPolicy {
+                block_size: 320,
+                cap: 640,
+            },
             Allocator::System(SystemAllocator::new()),
         );
 

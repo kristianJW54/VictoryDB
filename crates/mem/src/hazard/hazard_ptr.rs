@@ -300,7 +300,12 @@ impl<'domain, D, const N: usize> HzdPtrArray<'domain, D, N> {
 
 impl<D, const N: usize> Drop for HzdPtrArray<'_, D, N> {
     fn drop(&mut self) {
-        todo!()
+        self.reset_protection();
+        let domain = self.hzd_ptr_array[0].domain;
+
+        let each_ref = self.hzd_ptr_array.each_ref().map(|ptr| ptr.hazard);
+
+        domain.release_many(each_ref)
     }
 }
 

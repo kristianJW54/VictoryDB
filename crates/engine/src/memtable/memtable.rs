@@ -13,8 +13,8 @@ use crate::key::comparator::Comparator;
 use crate::key::internal_key::{InternalKeyRef, OperationType, encode_trailer};
 use crate::memtable::skip_list::{Iter, Node, SkipList};
 use mem::allocator::Allocator;
-use mem::arena::Arena;
 use mem::arena::ArenaSize;
+use mem::arena::{Arena, ArenaPolicy};
 
 pub(crate) type MemID = u64;
 
@@ -110,13 +110,23 @@ impl<S: MemtableState> Clone for Memtable<S> {
 }
 
 impl<S: MemtableState> Memtable<S> {
-    pub(crate) fn new_memtable() -> Memtable<Mutable> {
-        todo!()
-    }
-
     unsafe fn encode_key(&self, ptr: *mut Node, user_key: &[u8], seq_no: u32, op_type: u32) {
         todo!()
     }
+}
+
+// Reader special wrapper for superversion
+// Type state helps for paths, but in the superversion read path, all memtables are read only so for the mutable memtable
+// it is beneficial to just expose the MemtableInner with a light wrapper over it which is specific for the reader in superversion and allows strict access
+// to read-only methods with no control flow access
+
+pub(crate) struct ReadableMemtable {
+    inner: Arc<MemtableInner>,
+}
+
+impl ReadableMemtable {
+    // TODO:
+    // Safe readable methods
 }
 
 impl Memtable<Mutable> {
@@ -125,13 +135,19 @@ impl Memtable<Mutable> {
     // Called should do Memtable::new() and get mutable mem which would happen during a rotation
     pub(crate) fn new(
         id: MemID,
-        arena_size: ArenaSize,
+        arena_size: ArenaPolicy,
         allocator: Allocator,
         comp: Arc<dyn Comparator>,
     ) -> Self {
         Self {
             _state: PhantomData,
             inner: Arc::new(MemtableInner::new(id, arena_size, allocator, comp)),
+        }
+    }
+
+    pub(crate) fn readable_memtable(&self) -> ReadableMemtable {
+        ReadableMemtable {
+            inner: Arc::clone(&self.inner),
         }
     }
 
@@ -188,7 +204,7 @@ impl Display for MemtableInner {
 impl MemtableInner {
     fn new(
         id: MemID,
-        arena_size: ArenaSize,
+        arena_size: ArenaPolicy,
         allocator: Allocator,
         comp: Arc<dyn Comparator>,
     ) -> Self {
@@ -322,9 +338,5 @@ mod tests {
     fn mem_enum() {
         let mem = MemLifeCycle::Active;
         assert_eq!(mem as u8, 1);
-    }
-
-    fn testing_new() {
-        let mem = Memtable::<Mutable>::new_memtable();
     }
 }

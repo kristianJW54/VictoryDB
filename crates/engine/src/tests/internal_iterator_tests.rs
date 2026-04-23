@@ -13,7 +13,10 @@ mod tests {
     fn seek_to_for_memtable() {
         let mem = Memtable::new(
             0,
-            ArenaSize::Custom(640, 640),
+            ArenaPolicy {
+                block_size: 640,
+                cap: 640,
+            },
             Allocator::System(SystemAllocator::new()),
             InternalKeyComparator::new(),
         );

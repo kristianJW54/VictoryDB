@@ -371,6 +371,14 @@ impl<F> HzdDomain<F> {
         self.push_available(release_rec, release_rec)
     }
 
+    pub(super) fn release_many<const N: usize>(&self, records: [&HzdPtrRec; N]) {
+        let head = records[0];
+        let tail = records.last().expect("should be N > 0");
+
+        assert!(tail.available.load(Ordering::Relaxed).is_null());
+        self.push_available(head, tail);
+    }
+
     pub(super) fn push_available(&self, head: &HzdPtrRec, tail: &HzdPtrRec) {
         debug_assert!(tail.available.load(Ordering::Relaxed).is_null());
 
@@ -606,5 +614,27 @@ mod tests {
     #[test]
     fn acquire_and_push_available() {
         let g = HzdDomain::global();
+
+        // First check that global available is empty
+        assert!(
+            g.hazard_pointers
+                .avail_head
+                .load(Ordering::Relaxed)
+                .is_null()
+        );
+
+        let mut many = HzdPtr::many::<5>();
+
+        drop(many);
+
+        // Now check that global has 5 on the available list
+
+        assert!(g.hazard_pointers.count.load(Ordering::Relaxed) == 5);
+
+        // Compiler should not let me do this:
+        // let ptr = many.as_refs()[0];
+        //
     }
+
+    //
 }
