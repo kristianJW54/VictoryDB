@@ -2,6 +2,7 @@
 //
 //
 
+use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering;
 use std::{marker::PhantomData, ptr::NonNull, sync::atomic::AtomicPtr};
@@ -55,8 +56,10 @@ impl HzdPtr<'static, Global> {
         Self::new_in_domain(HzdDomain::global())
     }
     //
-    // TODO: Include a many_in_domain as future API if needed
-    //
+
+    pub fn many<const N: usize>() -> HzdPtrArray<'static, Global, N> {
+        Self::many_in_domain(HzdDomain::global())
+    }
 }
 
 impl<'domain, D> HzdPtr<'domain, D> {
@@ -64,6 +67,19 @@ impl<'domain, D> HzdPtr<'domain, D> {
         Self {
             hazard: domain.acquire(),
             domain,
+        }
+    }
+
+    pub fn many_in_domain<const N: usize>(
+        domain: &'domain HzdDomain<D>,
+    ) -> HzdPtrArray<'domain, D, N> {
+        HzdPtrArray {
+            hzd_ptr_array: domain.acquire_many::<N>().map(|ptr| {
+                ManuallyDrop::new(HzdPtr {
+                    hazard: ptr,
+                    domain,
+                })
+            }),
         }
     }
 
@@ -213,12 +229,77 @@ impl<'domain, D> HzdPtr<'domain, D> {
             Ok(NonNull::new(ptr).map(|ptr| (ptr, PhantomData)))
         }
     }
+
+    pub fn reset_protection(&mut self) {
+        self.hazard.reset();
+    }
 }
 
 impl<T> Drop for HzdPtr<'_, T> {
     fn drop(&mut self) {
         self.hazard.reset();
         // Domain release
+        todo!()
+    }
+}
+
+pub struct HzdPtrArray<'domain, D, const N: usize> {
+    // Manually dropped is used to prevent the HzdPtr inside from reclaiming itself, we implement a specific drop for
+    // HzdPtrArray
+    hzd_ptr_array: [ManuallyDrop<HzdPtr<'domain, D>>; N],
+}
+
+impl<const N: usize> Default for HzdPtrArray<'static, Global, N> {
+    fn default() -> Self {
+        HzdPtr::many::<N>()
+    }
+}
+
+impl<'domain, D, const N: usize> HzdPtrArray<'domain, D, N> {
+    //
+
+    // This was a confusing one at first so I refer to the HapHazard docs:
+    // https://github.com/jonhoo/haphazard/blob/main/src/hazard.rs#L292
+    //
+    // Essentially the compiler knows that the elements inside are individual elements based on the const array
+    // so we mutably borrow each element inside instead of slicing in and returning SomeType(i) which the borrow checker
+    // cannot assert is distinct from the other elements
+    pub fn as_refs<'array>(&'array mut self) -> [&'array HzdPtr<'domain, D>; N] {
+        self.hzd_ptr_array.each_mut().map(|v| &**v)
+    }
+
+    // protect_all goes through each source AtomicPtr<T> and protects it with the corresponding slot in the HzdPtrArray
+    // the return is [Option; N] so that if protect() returns Null the index at that postion will be None
+    pub fn protect_all<'hazard_object, T>(
+        &'hazard_object mut self,
+        mut sources: [&'_ AtomicPtr<T>; N],
+    ) -> [Option<&'hazard_object T>; N]
+    where
+        T: Sync,
+        D: 'static,
+    {
+        let mut output = [None; N];
+
+        for (i, (hzdptr, src)) in self.hzd_ptr_array.iter_mut().zip(&mut sources).enumerate() {
+            output[i] = unsafe { hzdptr.protect(src) }
+        }
+
+        output
+    }
+
+    //
+
+    pub fn reset_protection(&mut self) {
+        for ptr in self.hzd_ptr_array.iter_mut() {
+            ptr.reset_protection();
+        }
+    }
+}
+
+// Drop implementation for HzdPtrArray
+
+impl<D, const N: usize> Drop for HzdPtrArray<'_, D, N> {
+    fn drop(&mut self) {
         todo!()
     }
 }

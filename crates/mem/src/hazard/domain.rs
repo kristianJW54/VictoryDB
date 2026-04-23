@@ -372,7 +372,35 @@ impl<F> HzdDomain<F> {
     }
 
     pub(super) fn push_available(&self, head: &HzdPtrRec, tail: &HzdPtrRec) {
-        unimplemented!()
+        debug_assert!(tail.available.load(Ordering::Relaxed).is_null());
+
+        assert!(head as *const _ as usize & LOCK_BIT == 0);
+
+        loop {
+            let avail = self.hazard_pointers.avail_head.load(Ordering::Acquire);
+            if (avail as usize & LOCK_BIT) == 0 {
+                tail.available.store(avail as *mut _, Ordering::Relaxed);
+
+                if self
+                    .hazard_pointers
+                    .avail_head
+                    .compare_exchange(
+                        avail,
+                        head as *const _ as *mut _,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    break;
+                } else {
+                    #[cfg(not(any(loom, feature = "std")))]
+                    core::hint::spin_loop();
+                    #[cfg(any(loom, feature = "std"))]
+                    crate::sync::yield_now();
+                }
+            }
+        }
     }
 
     //
@@ -391,6 +419,8 @@ pub struct HazPtrRecs {
 #[cfg(test)]
 mod tests {
     use std::thread;
+
+    use crate::hazard::hazard_ptr::HzdPtr;
 
     use super::*;
 
@@ -571,5 +601,10 @@ mod tests {
         for _ in 0..acquired.len() {
             assert!(!acquired[0].available.load(Ordering::Relaxed).is_null());
         }
+    }
+
+    #[test]
+    fn acquire_and_push_available() {
+        let g = HzdDomain::global();
     }
 }
