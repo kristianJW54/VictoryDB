@@ -26,6 +26,8 @@ pub(crate) struct ColumnFamilyData {
     // --
     // NOTE: *Version
     // NOTE: ThreadLocal<Superversion>,
+    //
+    // Version_history?
 }
 
 // BASIC IMPL

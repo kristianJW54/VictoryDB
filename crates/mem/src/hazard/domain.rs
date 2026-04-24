@@ -426,7 +426,7 @@ impl<F> HzdDomain<F> {
         }
     }
 
-    // Retire
+    // Retire - start of the reclamation chain
     pub unsafe fn retire_ptr<T>(&self, ptr: *mut T) -> usize
     where
         T: Send,
@@ -434,7 +434,15 @@ impl<F> HzdDomain<F> {
         0
     }
 
+    // TODO:
+    // - Push onto retire list which is sharded to reduce contention
     //
+    // - Check threshold
+    //
+    // rcount tracks how much work is waiting,
+    // hcount estimates how expensive it is to do that work.
+    //
+    // - Do reclamation
 }
 
 // Hazard Pointer Records which is the Linked List of HzdPtrRec which are the containers for hazard pointers to load into and protect object

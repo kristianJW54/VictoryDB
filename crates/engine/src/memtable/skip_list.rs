@@ -1,3 +1,19 @@
+// This file is inspired from crossbeams implementation of a skiplist
+// (https://github.com/crossbeam-rs/crossbeam)
+//
+// Copyright 2019 (c) The Crossbeam Project Developers
+//
+// Licensed under either of the following, at your option:
+//
+// - Apache License, Version 2.0 (see LICENSE-APACHE or
+//   http://www.apache.org/licenses/LICENSE-2.0)
+// - MIT License (see LICENSE-MIT or
+//   https://opensource.org/licenses/MIT)
+//
+// Modifications have been made to the original code to use arena backed implementation
+//
+//
+//
 // SkipList
 
 // For the skip list node we will be using the flexible array member (FAM) concept from C99.

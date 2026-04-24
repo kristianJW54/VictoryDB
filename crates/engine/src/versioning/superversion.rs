@@ -35,7 +35,6 @@ pub(crate) struct Superversion {
     // between SuperVersions.
     // std::shared_ptr<const SeqnoToTimeMapping> seqno_to_time_mapping{nullptr};
     //
-    //
 }
 
 // SuperVersion Cache to be stored in Thread Local Storage which is effectively static for the lifetime of the programme
