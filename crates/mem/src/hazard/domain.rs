@@ -1,29 +1,31 @@
+// This file is derived from HapHazard (https://github.com/jonhoo/haphazard/tree/main)
+// Copyright (c) Jon Gjengset
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at:
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Modifications have been made.
 //
 //
-//
+
 //
 //
 // DOCS: Describe global here and document
 //
 //
 //
-/// ## Reclamation
-///
-/// Domains are the coordination mechanism used for reclamation. When an object is retired into a
-/// domain, the retiring thread will (sometimes) scan the domain for objects that are now safe to
-/// reclaim (i.e., drop). Objects that cannot yet be reclaimed because there are active readers are
-/// left in the domain for a later retire to check again. This means that there is generally a
-/// delay between when an object is retired (i.e., marked as deleted) and when it is actually
-/// reclaimed (i.e., [`drop`](core::mem::drop) is called). And if there are no more retires, the
-/// objects may not be reclaimed until the owning domain is itself dropped.
-///
-///
-// We want to be able to statically create unique domains using a Singleton pattern as a trait
-// with a macro to generate unique domain instances based on Jon Gjongset's implementation:
-// https://github.com/jonhoo/hazard/blob/master/src/domain.rs
+// ## Reclamation
+//
+//
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::hazard::hazard_ptr::HzdPtrRec;
+
+#[cfg(all(target_pointer_width = "64", not(loom)))]
+const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
 
 const LOCK_BIT: usize = 1;
 
@@ -37,6 +39,19 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
     }
 }
 
+// Domains are the coordination mechanism used for reclamation. When an object is retired into a
+// domain, the retiring thread will (sometimes) scan the domain for objects that are now safe to
+// reclaim (i.e., drop). Objects that cannot yet be reclaimed because there are active readers are
+// left in the domain for a later retire to check again. This means that there is generally a
+// delay between when an object is retired (i.e., marked as deleted) and when it is actually
+// reclaimed (i.e., [`drop`](core::mem::drop) is called). And if there are no more retires, the
+// objects may not be reclaimed until the owning domain is itself dropped.
+//
+//
+// We want to be able to statically create unique domains using a Singleton pattern as a trait
+// with a macro to generate unique domain instances based on Jon Gjongset's implementation:
+// https://github.com/jonhoo/hazard/blob/master/src/domain.rs
+//
 pub unsafe trait Singleton {}
 
 // Macro to create unique static domain instances
@@ -409,6 +424,14 @@ impl<F> HzdDomain<F> {
                 }
             }
         }
+    }
+
+    // Retire
+    pub unsafe fn retire_ptr<T>(&self, ptr: *mut T) -> usize
+    where
+        T: Send,
+    {
+        0
     }
 
     //
