@@ -12,10 +12,26 @@ use std::cell::UnsafeCell;
 use std::ptr::NonNull;
 
 //
-//
-// EphemeralKey
 pub(crate) type EphemeralInternalKey = EphemeralKey<INLINE_IK_SIZE>;
 
+/// EphemeralKey is a temporary closure based key wrapper that uses InnerKey for inline storage and a thread-local buffer for heap storage.
+/// The main purpose is to provide a short-lived key wrapper that can be used in closures and to fallback to a single thread-local buffer for heap storage.
+/// Because the heap storage is thread-local, there is no contention and the overhead of a heap allocation is avoided BUT we must ensure that
+/// the buffer is not retained across multiple calls, as the key may be short-lived and the buffer should be cleared after each use.
+///
+/// Example usage:
+/// ```
+///
+/// let user_key = "key".to_string().into_bytes();
+///
+/// // Create an EphemeralKey which initializes an inline stack buffer for small keys or does nothing for large keys
+/// let mut key = EphemeralKey::new();
+///
+/// // Use the EphemeralKey in a closure which calls into TCTX thread-local EphemeralBuffer for heap storage
+/// key.with_ephemeral_key(&user_key, 10, OperationType::Put, |internal_key| {
+///     // Do something with the internal_key in the closure
+/// });
+/// ```
 pub(crate) struct EphemeralKey<const N: usize> {
     _inner: InnerKey<N>,
 }

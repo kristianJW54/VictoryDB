@@ -437,7 +437,6 @@ impl SkipList {
     pub(super) fn search(&self, key: &[u8]) -> TraversalCtx {
         //
 
-        // We need an outer loop so that we can reattempt the search if we encounter a concurrent modification
         let mut t = TraversalCtx::default();
 
         // Set t.predecessors to point to the sentinel at each level
@@ -471,17 +470,20 @@ impl SkipList {
                 let node_key =
                     unsafe { slice::from_raw_parts(Node::key_ptr(curr), (*curr).key_len as usize) };
 
-                // TODO: Need to create a InternalKeyComparator for internal key logic and encoding comparison
                 match self.comparator.compare(node_key, key) {
                     Ord::Less => {
                         pred = curr;
                         curr = Node::load_next(pred, level, Ordering::Relaxed);
                     }
-                    Ord::Equal => {
-                        t.searched_node = Some(unsafe { NonNull::new_unchecked(curr) });
-                        break;
-                    }
-                    Ord::Greater => {
+                    // Ord::Equal => {
+                    //     t.searched_node = Some(unsafe { NonNull::new_unchecked(curr) });
+                    //     break;
+                    // }
+                    // Ord::Greater => {
+                    //     println!("greater - curr: {:?}", curr);
+                    //     break;
+                    // }
+                    _ => {
                         break;
                     }
                 }
@@ -491,6 +493,20 @@ impl SkipList {
             t.successors[level] = curr;
         }
         return t;
+    }
+
+    /// Search node returns a raw pointer to the node if found, or null if not found.
+    /// It is the caller's responsibility to ensure that the pointer is used correctly and not leaked.
+    pub(super) fn search_node(&self, key: &[u8]) -> *mut Node {
+        self.search(key).successors[0] as *mut Node
+    }
+
+    pub(super) fn load_next(&self, current: *mut Node) -> *mut Node {
+        Node::load_next(current, 0, Ordering::Relaxed)
+    }
+
+    pub(super) fn first_node(&self) -> *mut Node {
+        Node::load_next(self.head(), 0, Ordering::Relaxed)
     }
 
     /// Inserts a key-value pair into the skip list.
@@ -741,6 +757,8 @@ impl SkipList {
     }
 }
 
+// Iter is the skiplist low level iterator to implement Rust's Iterator trait - it helps for linear traversal of the skiplist and testing
+// Not to be used by DBIterators
 pub(super) struct Iter<'a> {
     item: *mut Node,
     _p: PhantomData<&'a ()>,

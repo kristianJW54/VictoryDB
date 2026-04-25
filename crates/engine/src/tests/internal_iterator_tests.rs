@@ -37,9 +37,7 @@ mod tests {
             InternalKeyRef::from(k.as_ref())
         }
 
-        // -----------------------------
-        // 1. Full ordering
-        // -----------------------------
+        // Full ordering
         {
             let mut iter = mem.iter();
             iter.seek_to_first();
@@ -48,48 +46,40 @@ mod tests {
 
             for k in expected {
                 assert!(iter.valid());
-                assert_eq!(iter.internal_key(), ik(k));
+                assert_eq!(iter.internal_key().unwrap(), ik(k));
                 iter.next();
             }
 
             assert!(!iter.valid());
         }
 
-        // -----------------------------
-        // 2. Seek exact position
-        // -----------------------------
+        // Seek exact position
         {
             let mut iter = mem.iter();
 
             iter.seek(k2.as_ref());
             assert!(iter.valid());
-            assert_eq!(iter.internal_key(), ik(&k2));
+            assert_eq!(iter.internal_key().unwrap(), ik(&k2));
         }
 
-        // -----------------------------
-        // 3. Seek lands on first ≥ key
-        // -----------------------------
+        // Seek lands on first ≥ key
         {
             let mut iter = mem.iter();
 
             // seq=10 is before all User1001 entries → should land on k4
             iter.seek(LookUpInternalKey::new(b"51.1.User1001", 10, OperationType::Max).as_ref());
-            assert_eq!(iter.internal_key(), ik(&k4));
+            assert_eq!(iter.internal_key().unwrap(), ik(&k4));
         }
 
-        // -----------------------------
-        // 4. Seek inside version chain
-        // -----------------------------
+        // Seek inside version chain
         {
             let mut iter = mem.iter();
 
             iter.seek(LookUpInternalKey::new(b"51.1.User1001", 3, OperationType::Max).as_ref());
-            assert_eq!(iter.internal_key(), ik(&k3));
+            assert_eq!(iter.internal_key().unwrap(), ik(&k3));
         }
 
-        // -----------------------------
-        // 5. Seek past all versions (IMPORTANT FIX)
-        // -----------------------------
+        // Seek past all versions
         {
             let mut iter = mem.iter();
 
@@ -97,29 +87,25 @@ mod tests {
             iter.seek(LookUpInternalKey::new(b"51.1.User1001", 0, OperationType::Max).as_ref());
 
             assert!(iter.valid());
-            assert_eq!(iter.internal_key(), ik(&k_other)); // ✅ FIXED
+            assert_eq!(iter.internal_key().unwrap(), ik(&k_other));
         }
 
-        // -----------------------------
-        // 6. Cross-key seek
-        // -----------------------------
+        // Cross-key seek
         {
             let mut iter = mem.iter();
 
             iter.seek(LookUpInternalKey::new(b"51.1.User1002", 100, OperationType::Max).as_ref());
-            assert_eq!(iter.internal_key(), ik(&k_other));
+            assert_eq!(iter.internal_key().unwrap(), ik(&k_other));
         }
 
-        // -----------------------------
-        // 7. Seek to non-existent key
-        // -----------------------------
+        // Seek to non-existent key
         {
             let mut iter = mem.iter();
 
             iter.seek(LookUpInternalKey::new(b"51.1.User1001a", 100, OperationType::Max).as_ref());
 
             assert!(iter.valid());
-            assert_eq!(iter.internal_key(), ik(&k_other));
+            assert_eq!(iter.internal_key().unwrap(), ik(&k_other));
         }
     }
 }

@@ -1,7 +1,7 @@
 //
 //
 //
-// InnerKey is used as the underlying ptr storage and inline logic for keys. Different wrappers implementations will wrap inner key
+// InnerKey is used as the underlying ptr storage and inline logic for keys. Different wrapper implementations will wrap inner key
 // and provide inline const bounds with heap fallback
 //
 

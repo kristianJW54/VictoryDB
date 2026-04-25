@@ -264,7 +264,7 @@ impl MemtableInner {
     fn iter(&self) -> MemtableIterator<'_> {
         MemtableIterator {
             sl: &self.skiplist,
-            item: self.skiplist.iter(),
+            item: Node::load_next(self.skiplist.head(), 0, Ordering::Relaxed),
             current: None,
         }
     }
@@ -272,7 +272,7 @@ impl MemtableInner {
     fn iter_from(&self, key: &[u8]) -> MemtableIterator<'_> {
         MemtableIterator {
             sl: &self.skiplist,
-            item: self.skiplist.seek(key),
+            item: self.skiplist.search_node(key),
             current: None,
         }
     }
@@ -280,13 +280,14 @@ impl MemtableInner {
 
 pub(crate) struct MemtableIterator<'a> {
     sl: &'a SkipList,
-    item: Iter<'a>,
+    item: *mut Node,
     current: Option<NonNull<Node>>,
 }
 
 impl<'a> MemtableIterator<'a> {
-    pub(crate) fn internal_key(&self) -> InternalKeyRef<'_> {
-        InternalKeyRef::from(self.key())
+    pub(crate) fn internal_key(&self) -> Option<InternalKeyRef<'_>> {
+        self.current
+            .map(|curr| InternalKeyRef::from(Node::get_key_bytes(curr.as_ptr())))
     }
 }
 
@@ -296,34 +297,31 @@ impl<'a> InternalIterator for MemtableIterator<'a> {
     }
 
     fn seek_to_first(&mut self) {
-        self.item = self.sl.iter();
-        self.current = self
-            .item
-            .next()
-            .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+        self.item = Node::load_next(self.sl.head(), 0, Ordering::Relaxed);
+        self.current = NonNull::new(self.item)
     }
 
     fn seek(&mut self, key: &[u8]) {
-        self.item = self.sl.seek(key);
-        self.current = self
-            .item
-            .next()
-            .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+        self.item = self.sl.search_node(key);
+        self.current = NonNull::new(self.item)
     }
 
     fn next(&mut self) {
-        self.current = self
-            .item
-            .next()
-            .map(|ptr| unsafe { NonNull::new_unchecked(ptr) });
+        if let Some(curr) = self.current {
+            self.current = NonNull::new(Node::load_next(curr.as_ptr(), 0, Ordering::Relaxed))
+        } else {
+            self.current = None;
+        }
     }
 
     fn key(&self) -> &[u8] {
         debug_assert!(self.valid());
+        //TODO: We should maybe do a valid check before calling key() does this need to be unsafe?
         Node::get_key_bytes(self.current.unwrap().as_ptr())
     }
 
     fn value(&self) -> &[u8] {
+        //TODO: We should maybe do a valid check before calling value() does this need to be unsafe?
         debug_assert!(self.valid());
         Node::get_value_bytes(self.current.unwrap().as_ptr())
     }

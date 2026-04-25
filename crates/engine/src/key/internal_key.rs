@@ -9,13 +9,15 @@
 // | user key bytes    | 8 byte trailer    |
 // +-------------------+-------------------+
 //
-
+//
+// InternalKey represents the encoding of the internal key used in the db. It is made up of a user key, sequence number, and operation type.
+// The functions in this file handle trailer encoding and decoding, as well as bit packing/unpacking of the trailer.
+//
+// The main structs are InternalKeyRef which represents a borrowed decoded view of an InternalKey
+//
 //
 
-use std::cell::UnsafeCell;
 use std::fmt::Display;
-use std::ops::Deref;
-use std::ptr::NonNull;
 
 pub(super) const INLINE_IK_SIZE: usize = 20;
 
