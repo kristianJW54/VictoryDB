@@ -30,13 +30,14 @@ struct ThreadContext {
 
 use std::cell::RefCell;
 
+// TODO: Should i remove ref cell and wrap the hazard_pointer in UnsafeCell or RefCell so we don't borrow_mut() on whole TLS?
 thread_local! {
-    pub(crate) static TCTX: RefCell<ThreadCtx> = RefCell::new(ThreadCtx::new())
+    pub(crate) static TCTX: ThreadCtx = ThreadCtx::new()
 }
 
 pub(crate) fn thread_ctx<F, R>(f: F) -> R
 where
-    F: FnOnce(&RefCell<ThreadCtx>) -> R,
+    F: FnOnce(&ThreadCtx) -> R,
 {
     TCTX.with(|ctx| f(ctx))
 }

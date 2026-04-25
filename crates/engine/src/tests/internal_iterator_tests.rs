@@ -4,13 +4,13 @@ mod tests {
     use crate::iterator::internal_iterator::InternalIterator;
     use crate::key::comparator::InternalKeyComparator;
     use crate::key::internal_key::{InternalKeyRef, OperationType};
-    use crate::key::internal_key::{LookUpInternalKey, LookUpKey};
+    use crate::key::lookup_key::{LookUpInternalKey, LookUpKey};
     use crate::memtable::memtable::*;
     use mem::allocator::*;
     use mem::arena::*;
 
     #[test]
-    fn seek_to_for_memtable() {
+    fn memtable_internal_iterator() {
         let mem = Memtable::new(
             0,
             ArenaPolicy {
@@ -20,58 +20,106 @@ mod tests {
             Allocator::System(SystemAllocator::new()),
             InternalKeyComparator::new(),
         );
-        // Put a few keys in the memtable
 
-        // Put a few keys in the memtable
+        let k1 = LookUpInternalKey::new(b"51.1.User1001", 1, OperationType::Put);
+        let k2 = LookUpInternalKey::new(b"51.1.User1001", 2, OperationType::Put);
+        let k3 = LookUpInternalKey::new(b"51.1.User1001", 3, OperationType::Put);
+        let k4 = LookUpInternalKey::new(b"51.1.User1001", 4, OperationType::Delete);
+        let k_other = LookUpInternalKey::new(b"51.1.User1002", 5, OperationType::Put);
 
-        let k_1: LookUpInternalKey = LookUpKey::new(b"51.1.User1001", 1, OperationType::Put);
-        let k_2: LookUpInternalKey = LookUpKey::new(b"51.1.User1001", 2, OperationType::Put);
-        let k_3: LookUpInternalKey = LookUpKey::new(b"51.1.User1001", 3, OperationType::Put);
-        let k_4: LookUpInternalKey = LookUpKey::new(b"51.1.User1001", 4, OperationType::Delete);
-        let k_wrong: LookUpInternalKey = LookUpKey::new(b"51.1.User1002", 5, OperationType::Put);
+        mem.insert(k1.as_ref(), b"value_1");
+        mem.insert(k2.as_ref(), b"value_2");
+        mem.insert(k3.as_ref(), b"value_3");
+        mem.insert(k4.as_ref(), b"");
+        mem.insert(k_other.as_ref(), b"value_4");
 
-        mem.insert(k_1.as_ref(), b"value_1");
-        mem.insert(k_2.as_ref(), b"value_2");
-        mem.insert(k_3.as_ref(), b"value_3");
-        mem.insert(k_4.as_ref(), b"");
-        mem.insert(k_wrong.as_ref(), b"value_4");
-
-        // Now we want to iterate through the memtable with InternalIterator
-
-        let mut int_iter = mem.iter();
-
-        int_iter.seek_to_first();
-        assert_eq!(int_iter.internal_key(), InternalKeyRef::from(k_4.as_ref()));
-
-        // Now try next()
-
-        let assert = vec![
-            InternalKeyRef::from(k_4.as_ref()),
-            InternalKeyRef::from(k_3.as_ref()),
-            InternalKeyRef::from(k_2.as_ref()),
-            InternalKeyRef::from(k_1.as_ref()),
-        ];
-
-        assert_eq!(int_iter.internal_key(), assert[0]);
-
-        for i in 1..4 {
-            int_iter.next();
-            assert_eq!(int_iter.internal_key(), assert[i]);
+        fn ik(k: &LookUpInternalKey) -> InternalKeyRef<'_> {
+            InternalKeyRef::from(k.as_ref())
         }
 
-        // Now want to test seek()
+        // -----------------------------
+        // 1. Full ordering
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+            iter.seek_to_first();
 
-        let mut int_iter_2 = mem.iter();
-        let lk: InternalKeyRef = InternalKeyRef::from(k_2.as_ref());
-        int_iter_2
-            .seek(LookUpInternalKey::new(lk.user_key, lk.seq_no, OperationType::Max).as_ref());
-        assert_eq!(
-            int_iter_2.internal_key(),
-            InternalKeyRef::from(k_2.as_ref())
-        );
+            let expected = [&k4, &k3, &k2, &k1, &k_other];
 
-        // Seek to key and test look up key on higher seq_no
-        int_iter_2.seek(LookUpInternalKey::new(lk.user_key, 4, OperationType::Max).as_ref());
-        assert_eq!(int_iter_2.internal_key().op, OperationType::Delete as u8)
+            for k in expected {
+                assert!(iter.valid());
+                assert_eq!(iter.internal_key(), ik(k));
+                iter.next();
+            }
+
+            assert!(!iter.valid());
+        }
+
+        // -----------------------------
+        // 2. Seek exact position
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+
+            iter.seek(k2.as_ref());
+            assert!(iter.valid());
+            assert_eq!(iter.internal_key(), ik(&k2));
+        }
+
+        // -----------------------------
+        // 3. Seek lands on first ≥ key
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+
+            // seq=10 is before all User1001 entries → should land on k4
+            iter.seek(LookUpInternalKey::new(b"51.1.User1001", 10, OperationType::Max).as_ref());
+            assert_eq!(iter.internal_key(), ik(&k4));
+        }
+
+        // -----------------------------
+        // 4. Seek inside version chain
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+
+            iter.seek(LookUpInternalKey::new(b"51.1.User1001", 3, OperationType::Max).as_ref());
+            assert_eq!(iter.internal_key(), ik(&k3));
+        }
+
+        // -----------------------------
+        // 5. Seek past all versions (IMPORTANT FIX)
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+
+            // lands AFTER all User1001 → should go to next key
+            iter.seek(LookUpInternalKey::new(b"51.1.User1001", 0, OperationType::Max).as_ref());
+
+            assert!(iter.valid());
+            assert_eq!(iter.internal_key(), ik(&k_other)); // ✅ FIXED
+        }
+
+        // -----------------------------
+        // 6. Cross-key seek
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+
+            iter.seek(LookUpInternalKey::new(b"51.1.User1002", 100, OperationType::Max).as_ref());
+            assert_eq!(iter.internal_key(), ik(&k_other));
+        }
+
+        // -----------------------------
+        // 7. Seek to non-existent key
+        // -----------------------------
+        {
+            let mut iter = mem.iter();
+
+            iter.seek(LookUpInternalKey::new(b"51.1.User1001a", 100, OperationType::Max).as_ref());
+
+            assert!(iter.valid());
+            assert_eq!(iter.internal_key(), ik(&k_other));
+        }
     }
 }

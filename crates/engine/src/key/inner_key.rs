@@ -5,7 +5,7 @@
 // and provide inline const bounds with heap fallback
 //
 
-use std::ptr::{NonNull, null, null_mut};
+use std::ptr::NonNull;
 
 use crate::key::{encode_into, internal_key::OperationType};
 
@@ -13,8 +13,8 @@ use crate::key::{encode_into, internal_key::OperationType};
 #[cfg(target_pointer_width = "64")]
 pub(super) const ITER_INLINE: usize = 39; // NOTE: Taken from RocksDB benchmarking proving the optimal inline size for iter keys is 39 bytes
 
-#[cfg(target_pointer_width = "64")]
-pub(super) const LOOKUP_INLINE: usize = 192;
+// #[cfg(target_pointer_width = "64")]
+// pub(super) const LOOKUP_INLINE: usize = 192;
 
 pub(super) struct InnerKey<const INLINE: usize> {
     _inline: [u8; INLINE],

@@ -4,15 +4,15 @@
 //
 //
 
-use crate::key::internal_key::Ephemeral_Buffer;
+use crate::key::ephemeral_key::Ephemeral_Buffer;
 use crate::thread_ctx::TCTX;
 use crate::versioning::superversion::SVCache;
-use mem::hazard::domain::Global;
-use mem::hazard::hazard_ptr::HzdPtr;
-use std::sync::atomic::AtomicPtr;
+
+//
+use std::cell::UnsafeCell;
 
 pub(crate) struct ThreadCtx {
-    sv_cache: SVCache,
+    // sv_cache: UnsafeCell<SVCache>,
     key_buffer: Ephemeral_Buffer,
     // NOTE: Add PerfContext/Metrics
     // NOTE: Add IOContext/Metrics
@@ -21,7 +21,7 @@ pub(crate) struct ThreadCtx {
 impl ThreadCtx {
     pub(crate) fn new() -> Self {
         Self {
-            sv_cache: SVCache::new(),
+            // sv_cache: UnsafeCell::new(SVCache::new()),
             key_buffer: Ephemeral_Buffer::new(),
         }
     }
@@ -29,14 +29,18 @@ impl ThreadCtx {
     pub(crate) fn inner_key_buf(&self) -> &Ephemeral_Buffer {
         &self.key_buffer
     }
+
+    // pub(crate) fn sv_cache_mut(&self) -> &mut SVCache {
+    // unsafe { &mut *self.sv_cache.get() }
+    // }
 }
 
 #[test]
 
 fn hzd_ptr() {
-    TCTX.with_borrow_mut(|ctx| {
-
+    TCTX.with(|ctx| {
         // Get the sv_cache
+        // let cache = ctx.sv_cache_mut();
         // Access the generation number to check freshness
         // If fresh:
         // take sv pointer and protect() -- cheap because it should still be the same in the holder

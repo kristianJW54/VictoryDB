@@ -2,9 +2,10 @@
 mod tests {
 
     use crate::key::comparator::InternalKeyComparator;
-    use crate::key::internal_key::{
-        EphemeralInternalKey, EphemeralKey, LookUpInternalKey, LookUpKey, OperationType,
-    };
+    use crate::key::ephemeral_key::{EphemeralInternalKey, EphemeralKey};
+    use crate::key::internal_key::OperationType;
+    use crate::key::lookup_key::{LookUpInternalKey, LookUpKey};
+
     use crate::memtable::memtable::*;
     use mem::allocator::*;
     use mem::arena::*;

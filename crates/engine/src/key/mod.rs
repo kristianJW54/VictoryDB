@@ -1,8 +1,11 @@
 use crate::key::internal_key::{OperationType, encode_trailer};
 
-pub mod comparator;
-pub mod inner_key;
-pub mod internal_key;
+pub(crate) mod comparator;
+pub(crate) mod ephemeral_key;
+pub(crate) mod inner_key;
+pub(crate) mod internal_key;
+pub(crate) mod iter_key;
+pub(crate) mod lookup_key;
 
 // TODO: Handling User key allocation
 // NOTE: On the write path we simply encode the internal key and write directly into memtable arena
