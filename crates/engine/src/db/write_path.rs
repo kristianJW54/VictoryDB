@@ -2,23 +2,49 @@
 //
 //
 //
+use super::write_batch::WriteBatch;
 
-pub(crate) trait WritePath {}
+use std::marker::PhantomData;
 
-pub(crate) struct ArenaDirect {
-    internalKeyBuffer: Vec<u8>, // FIXME: Change to actual type
+pub(crate) struct WriterContext {}
+
+pub(crate) struct SynOptions {} // -> fysnc bool etc maybe env options
+
+pub(crate) struct Writer {
+    ctx: WriterContext,
+    sync: SynOptions,
 }
-impl WritePath for ArenaDirect {}
 
-pub(crate) struct Buffered {}
-impl WritePath for Buffered {}
+// Impl
 
-#[cfg(feature = "arena_direct")]
-pub(crate) type ArenaDirectWriter = Writer<ArenaDirect>;
+impl Writer {
+    pub(crate) fn apply_batch(&self, batch: &WriteBatch) {
+        //
+        // What work to do here?
+        //
 
-#[cfg(feature = "buffered_key_writer")]
-pub(crate) type BufferedWriter = Writer<Buffered>;
+        #[cfg(feature = "buffered_key_writer")]
+        {
+            self.apply_buffered(batch);
+        }
+        #[cfg(feature = "arena_direct")]
+        {
+            self.apply_arena_direct(batch);
+        }
 
-pub(crate) struct Writer<W: WritePath> {
-    _path: std::marker::PhantomData<W>,
+        //
+        //
+    }
+
+    // TODO: Top level API's worth exploring
+
+    // fn log_data(data &[u8], options?) -> Write only to the WAL and not to mem useful for testing
+    //
+    // fn merge(key: &[u8], value: &[u8], options?)
+    //
+    //
+
+    fn apply_buffered(&self, batch: &WriteBatch) {}
+
+    fn apply_arena_direct(&self, batch: &WriteBatch) {}
 }
