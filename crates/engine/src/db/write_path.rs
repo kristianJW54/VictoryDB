@@ -2,7 +2,7 @@
 //
 //
 //
-use super::write_batch::WriteBatch;
+use super::write_batch::Batch;
 
 use std::marker::PhantomData;
 
@@ -18,7 +18,7 @@ pub(crate) struct Writer {
 // Impl
 
 impl Writer {
-    pub(crate) fn apply_batch(&self, batch: &WriteBatch) {
+    pub(crate) fn apply_batch(&self, batch: &Batch) {
         //
         // What work to do here?
         //
@@ -44,7 +44,7 @@ impl Writer {
     //
     //
 
-    fn apply_buffered(&self, batch: &WriteBatch) {}
+    fn apply_buffered(&self, batch: &Batch) {}
 
-    fn apply_arena_direct(&self, batch: &WriteBatch) {}
+    fn apply_arena_direct(&self, batch: &Batch) {}
 }
