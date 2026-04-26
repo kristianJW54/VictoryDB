@@ -133,6 +133,32 @@
 // Signal:
 //     wake A and B → success
 
-pub(crate) struct Batch {}
+pub(crate) struct Batch {
+    data: Vec<u8>,
+    // content_flags
+    // protection_info
+    // save_points
+    // wal_term_point
+    // max_bytes
+}
+
+// A record in a batch will have an operation type and a column family ID followed by varstring key and value.
+//
+// Get_op()
+// PutCF()
+// DeleteCF()
+//
 
 // TODO: Do we want apply_batch on the memtable? and then memtable can handle the insert and handle if direct or not
+//
+
+impl Batch {
+    //
+    pub(crate) fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    // TOOD: Add()
+
+    // NOTE: Can we defer creation until commit and then build the vec?
+}
