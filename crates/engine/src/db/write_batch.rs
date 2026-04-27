@@ -1,3 +1,5 @@
+use std::ptr;
+
 //
 //
 // NOTE: Do we want two queues? One for data commit and one for WAL commit?
@@ -82,7 +84,19 @@
 //
 const DEFAULT_BATCH_INIT_SIZE: usize = 1 << 10; // NOTE: This is where we'd like to get to if we pool batches
 const MAX_BATCH_SIZE: usize = 1 << 20;
-const NON_POOL_BATCH_INIT_SIZE: usize = 1 << 6; // NOTE: For now we start small (cache line) and grow if needed as we allocate on each batch for now
+const SINGLE_BATCH_INIT_SIZE: usize = 1 << 8; // NOTE: For now we start small (cache line) and grow if needed as we allocate on each batch for now
+
+const SEQ_NO_OFFSET: usize = 0; // seq starts at byte 0
+const BATCH_COUNT_OFFSET: usize = size_of::<u64>(); // count starts at byte 8
+const HEADER_SIZE: usize = size_of::<u64>() + size_of::<u32>(); // = 12
+
+#[repr(align(8))]
+pub(crate) enum BatchOpType {
+    Put = 1,
+    Delete = 2,
+    Merge = 3,
+    // XXXX:
+}
 
 pub(crate) struct Batch {
     data: Vec<u8>,
@@ -106,32 +120,34 @@ pub(crate) struct Batch {
 impl Batch {
     //
     pub(crate) fn new() -> Self {
-        Self {
-            data: Vec::with_capacity(NON_POOL_BATCH_INIT_SIZE),
-        }
+        let mut data = Vec::with_capacity(SINGLE_BATCH_INIT_SIZE);
+        data.extend_from_slice(&[0u8; HEADER_SIZE]);
+        Self { data }
     }
 
     pub(crate) fn new_with_capacity(cap: usize) -> Self {
         // NOTE: This, I don't like. Would like to limit big batches and maybe ensure the caller
         // knows that using max batches will encur direct flushable memtables
         assert!(cap <= MAX_BATCH_SIZE);
-        Self {
-            data: Vec::with_capacity(cap),
-        }
+        let mut data = Vec::with_capacity(cap);
+        data.extend_from_slice(&[0u8; HEADER_SIZE]);
+        Self { data }
     }
 
-    // TODO: Finish
-    pub(crate) fn put<K, V>(&self, key: K, value: V)
+    // Put uses the default column family (DEFAULT_CF)
+    pub(crate) fn put<K, V>(&mut self, key: K, value: V)
     where
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
     {
+        // NOTE: What work can we do here before calling put_bytes?
+        // value send off to blob file write the pointer bytes?
         println!("preparing batch");
         self.put_bytes(key.as_ref(), value.as_ref())
     }
 
-    pub(crate) fn put_bytes(&self, key: &[u8], value: &[u8]) {
-        println!("adding operation bytes")
+    pub(crate) fn put_bytes(&mut self, key: &[u8], value: &[u8]) {
+        println!("adding operation bytes");
     }
 
     // TOOD: Add()
@@ -147,14 +163,14 @@ mod tests {
     #[test]
     fn batch_init_size() {
         println!("batch size {}", DEFAULT_BATCH_INIT_SIZE);
-        println!("single op {}", NON_POOL_BATCH_INIT_SIZE);
+        println!("single op {}", SINGLE_BATCH_INIT_SIZE);
         println!("max {}", MAX_BATCH_SIZE);
     }
 
     #[test]
     fn input_test() {
         let word = "word";
-        let batch = Batch::new();
+        let mut batch = Batch::new();
 
         batch.put(word, "");
 

@@ -18,6 +18,8 @@ pub(crate) const INITIAL_KEY_BUFFER_CAP: usize = 512;
 pub(crate) const MEDIUM_KEY_THRESHOLD: usize = 1024;
 pub(crate) const MAX_BUFFER_RETAINED: usize = 4096;
 
+pub(crate) const SEEK_OP_SENTINEL: u8 = 255;
+
 #[inline(always)]
 pub(super) fn encode_into(dst: &mut [u8], user_key: &[u8], seq_no: u64, op_type: OperationType) {
     let user_len = user_key.len();
