@@ -2,7 +2,6 @@
 mod tests {
 
     use crate::key::comparator::InternalKeyComparator;
-    use crate::key::ephemeral_key::{EphemeralInternalKey, EphemeralKey};
     use crate::key::internal_key::OperationType;
     use crate::key::lookup_key::{LookUpInternalKey, LookUpKey};
 
@@ -45,53 +44,6 @@ mod tests {
         let search_key: LookUpInternalKey = LookUpKey::new(b"51.1.User1001", 3, OperationType::Max);
         let result = mem.get(search_key.as_ref());
         assert!(matches!(result, MemReturn::Value(b"value_3")));
-    }
-
-    #[test]
-    fn memtable_ephemeral_key_tests() {
-        let mem = Memtable::new(
-            0,
-            ArenaPolicy {
-                block_size: 640,
-                cap: 640,
-            },
-            Allocator::System(SystemAllocator::new()),
-            InternalKeyComparator::new(),
-        );
-
-        // Insert a few Ephemeral keys
-
-        let mut ek: EphemeralInternalKey = EphemeralKey::new();
-
-        ek.with_ephemeral_key(b"51.1.User1001", 1, OperationType::Put, |k| {
-            mem.insert(k, b"value_1");
-        });
-
-        ek.with_ephemeral_key(b"51.1.User1001", 2, OperationType::Put, |k| {
-            mem.insert(k, b"value_2");
-        });
-        ek.with_ephemeral_key(b"51.1.User1001", 3, OperationType::Put, |k| {
-            mem.insert(k, b"value_3");
-        });
-        ek.with_ephemeral_key(b"51.1.User1001", 4, OperationType::Put, |k| {
-            mem.insert(k, b"value_4");
-        });
-        ek.with_ephemeral_key(b"51.1.User1002", 5, OperationType::Put, |k| {
-            mem.insert(k, b"value_5");
-        });
-
-        // Now we look up with an Ephemeral key
-
-        let result = ek.with_ephemeral_key(b"51.1.User1001", 3, OperationType::Max, |v| {
-            // Lookup the key and return the value
-            let r = mem.get(v);
-            match r {
-                MemReturn::Value(value) => value,
-                _ => b"",
-            }
-        });
-
-        assert_eq!(result, b"value_3");
     }
 
     #[test]

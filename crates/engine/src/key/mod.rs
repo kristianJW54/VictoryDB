@@ -1,7 +1,6 @@
 use crate::key::internal_key::{OperationType, encode_trailer};
 
 pub(crate) mod comparator;
-pub(crate) mod ephemeral_key;
 pub(crate) mod inner_key;
 pub(crate) mod internal_key;
 pub(crate) mod iter_key;

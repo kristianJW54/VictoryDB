@@ -2,11 +2,14 @@
 //
 //
 
+use std::ops::Deref;
+
 const MSB: u8 = 0x80;
 const LOW_7_BITS: u32 = 0x7F;
 const SHIFT_7_BITS: u32 = 7;
 
-enum VarInt {
+#[derive(Debug)]
+pub(crate) enum VarInt {
     One([u8; 1]),
     Two([u8; 2]),
     Three([u8; 3]),
@@ -35,6 +38,23 @@ impl VarInt {
         }
     }
 
+    pub(crate) fn decode(buf: &[u8]) -> (u32, usize) {
+        let mut result: u32 = 0;
+        let mut shift = 0;
+        let mut bytes_read = 0;
+
+        for byte in buf {
+            bytes_read += 1;
+            result |= ((*byte & 0x7F) as u32) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+
+        (result, bytes_read)
+    }
+
     pub(crate) fn as_slice(&self) -> &[u8] {
         match self {
             Self::One(buf) => buf.as_ref(),
@@ -59,5 +79,7 @@ fn want() {
 
     let value_3 = 3000000;
     let result_3 = VarInt::new(value_3);
+
     assert_eq!(result_3.as_slice().len(), 4);
+    assert_eq!(VarInt::decode(result_3.as_slice()), (3000000, 4));
 }

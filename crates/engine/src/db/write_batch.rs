@@ -1,4 +1,10 @@
-use std::ptr;
+use std::{
+    fmt::{self, write},
+    ops::Deref,
+    ptr,
+};
+
+use crate::utils::var_int::VarInt;
 
 //
 //
@@ -13,7 +19,7 @@ use std::ptr;
 //
 //
 // Operation:
-// | op_type (1 byte) | cf_if (4 bytes) | key_len (1 byte) | key ... | value_len (1 byte) | value ... |
+// | op_type (1 byte) | cf_if (4 bytes) | key_len (VarInt) | key ... | value_len (VarInt) | value ... |
 //
 //
 // A batch holds a set of operations to be committed atomically as part of the write path.
@@ -91,11 +97,38 @@ const BATCH_COUNT_OFFSET: usize = size_of::<u64>(); // count starts at byte 8
 const HEADER_SIZE: usize = size_of::<u64>() + size_of::<u32>(); // = 12
 
 #[repr(align(8))]
+#[derive(Debug)]
 pub(crate) enum BatchOpType {
     Put = 1,
     Delete = 2,
     Merge = 3,
     // XXXX:
+}
+
+impl fmt::Display for BatchOpType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Put => {
+                write!(f, "Put")
+            }
+            Self::Delete => {
+                write!(f, "Delete")
+            }
+            Self::Merge => {
+                write!(f, "Merge")
+            }
+        }
+    }
+}
+
+impl BatchOpType {
+    pub(crate) fn into(self) -> u8 {
+        match self {
+            Self::Put => 1,
+            Self::Delete => 2,
+            Self::Merge => 3,
+        }
+    }
 }
 
 pub(crate) struct Batch {
@@ -118,9 +151,23 @@ pub(crate) struct Batch {
 //
 
 impl Batch {
-    //
+    /// Batch::new() is used to explicitly create a new batch for multiple operations. If a single operation is needed then rely on regular call to DB instead
+    /// as DB will internally create a single operation batch with an optimal buffer size.
+    /// Explicit calls to Batch::new() will create a larger initial buffer to account for multiple operations
+    ///
+    /// Example:
+    ///
+    /// ```
+    /// let batch = Batch::new();
+    /// batch.put("key", "");
+    /// batch.put("key2", "");
+    /// // ...
+    ///
+    /// batch.write();
+    ///
+    /// ```
     pub(crate) fn new() -> Self {
-        let mut data = Vec::with_capacity(SINGLE_BATCH_INIT_SIZE);
+        let mut data = Vec::with_capacity(DEFAULT_BATCH_INIT_SIZE);
         data.extend_from_slice(&[0u8; HEADER_SIZE]);
         Self { data }
     }
@@ -148,6 +195,19 @@ impl Batch {
 
     pub(crate) fn put_bytes(&mut self, key: &[u8], value: &[u8]) {
         println!("adding operation bytes");
+
+        // Write to batch buffer
+        self.data.push(BatchOpType::Put.into());
+        self.data.extend_from_slice(&0u32.to_be_bytes());
+        self.data
+            .extend_from_slice(VarInt::new(key.len() as u32).as_slice());
+        self.data.extend_from_slice(key);
+        self.data
+            .extend_from_slice(VarInt::new(value.len() as u32).as_slice());
+        self.data.extend_from_slice(value);
+
+        // Increment count
+        //
     }
 
     // TOOD: Add()
@@ -161,10 +221,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batch_init_size() {
-        println!("batch size {}", DEFAULT_BATCH_INIT_SIZE);
-        println!("single op {}", SINGLE_BATCH_INIT_SIZE);
-        println!("max {}", MAX_BATCH_SIZE);
+    fn batch_op_typ() {
+        println!("{}", BatchOpType::Put.into());
     }
 
     #[test]
