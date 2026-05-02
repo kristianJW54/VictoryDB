@@ -13,7 +13,6 @@ impl DbImpl {
     //
     //
     pub(crate) fn write(&self, batch: &Batch /* Other params? */) -> Result<(), ()> {
-
         // What would i like?
         //
 
@@ -28,8 +27,6 @@ impl DbImpl {
         //
         // }
         //
-    }
-
 
         Ok(())
     }

@@ -1,16 +1,13 @@
 use std::{
-    cell::UnsafeCell,
-    cmp::Ordering,
-    mem::MaybeUninit,
     ptr::{self, NonNull},
-    sync::{
-        Condvar, Mutex,
-        atomic::{AtomicPtr, AtomicU8},
-    },
+    sync::atomic::{AtomicPtr, AtomicU8, Ordering},
     thread::{self, Thread},
 };
 
-use crate::db::write_batch::Batch;
+use crate::{
+    column_family::cf,
+    db::{write_batch::Batch, write_thread::WriteThread},
+};
 
 #[non_exhaustive]
 pub(super) struct WriterState;
@@ -39,8 +36,12 @@ pub(crate) struct Writer {
     batch: NonNull<Batch>,
     state: AtomicU8,
     next: AtomicPtr<Writer>,
-    park: Thread,
+    thread_handle: Thread,
 }
+
+// SAFETY: Writer fields accessed cross-thread are either atomic
+// or protected by the thread parking mechanism
+unsafe impl Sync for Writer {}
 
 impl Writer {
     pub(crate) fn new(batch: &Batch) -> Self {
@@ -48,7 +49,7 @@ impl Writer {
             batch: NonNull::from(batch),
             state: AtomicU8::new(0),
             next: AtomicPtr::new(ptr::null_mut()),
-            park: thread::current(),
+            thread_handle: thread::current(),
         }
     }
 
@@ -76,7 +77,86 @@ impl Writer {
         //
         // This is inspired by Rocks code see: https://github.com/facebook/rocksdb/blob/763401b595c8c1647908356e42525aadd0b90eae/db/write_thread.cc#L64
 
-        // Wait logic
-        todo!()
+        for _ in 0..200 {
+            if self.state.load(Ordering::Acquire) & WriterState::COMPLETE != 0 {
+                return;
+            }
+            std::hint::spin_loop();
+        }
+
+        // PERF: Include performance timings/collection here
+
+        for _ in 0..WriteThread::YIELD_PAUSE_ITERATIONS {
+            if self.state.load(Ordering::Acquire) & WriterState::COMPLETE != 0 {
+                return;
+            }
+            thread::yield_now();
+        }
+
+        // Fall through to block
+        self.wait_and_block();
+    }
+
+    #[inline]
+    fn wait_and_block(&self) {
+        self.state
+            .fetch_or(WriterState::LOCKED_WAITING, Ordering::Release);
+
+        while self.state.load(Ordering::Acquire) & WriterState::COMPLETE == 0 {
+            thread::park();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn writer_state() {
+        // Am i a follower
+        let follow = WriterState::FOLLOWER;
+
+        println!("{:08b}", follow);
+        println!("{:08b}", WriterState::FOLLOWER);
+        println!("{:08b}", follow | WriterState::FOLLOWER);
+
+        println!("follower? -> {}", follow & WriterState::FOLLOWER != 0);
+    }
+
+    #[test]
+    fn waiting_and_parking() {
+        let scope = thread::scope(|t| {
+            //
+            // Make the writer and batch inside the thread scope
+            let batch = Batch::new();
+            let mut writer = Writer::new(&batch);
+
+            let write_ptr = AtomicPtr::new(&raw mut writer);
+
+            t.spawn(move || {
+                thread::sleep(Duration::from_millis(1000));
+
+                //
+                let w = write_ptr.load(Ordering::Acquire);
+
+                unsafe {
+                    (*w).state
+                        .fetch_or(WriterState::COMPLETE, Ordering::Release)
+                };
+                //
+                unsafe {
+                    (*w).thread_handle.unpark();
+                }
+            });
+
+            println!("Blocking");
+            writer.wait_and_block();
+            println!("Unblocked");
+
+            // Here the follower can block and wait
+        });
     }
 }

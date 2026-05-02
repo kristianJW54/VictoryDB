@@ -57,6 +57,15 @@ impl Default for WriteThread {
 }
 
 impl WriteThread {
+    // NOTE: Later move to config options on the write thread if we want this to be configurable
+
+    // How many times do we want to asm!(PAUSE) on the fast path for Writer::wait()
+    pub(crate) const WAIT_PAUSE_ITERATIONS: usize = 200;
+    // How many time do we want to iterate and Thread::yield()
+    // XXX: Later if benchmarking shows contention, we can do what rocks did and add a predictive credit based yield to determine if we should yield or fall through
+    // to block
+    pub(crate) const YIELD_PAUSE_ITERATIONS: usize = 64;
+
     pub(crate) fn new() -> Self {
         Self {
             head: AtomicPtr::new(ptr::null_mut()),
