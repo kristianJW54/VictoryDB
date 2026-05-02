@@ -4,10 +4,7 @@ use std::{
     thread::{self, Thread},
 };
 
-use crate::{
-    column_family::cf,
-    db::{write_batch::Batch, write_thread::WriteThread},
-};
+use crate::db::{write_batch::Batch, write_thread::WriteThread};
 
 #[non_exhaustive]
 pub(super) struct WriterState;
@@ -87,6 +84,8 @@ impl Writer {
         // PERF: Include performance timings/collection here
 
         for _ in 0..WriteThread::YIELD_PAUSE_ITERATIONS {
+            // XXX: Later if benchmarking shows contention, we can do what rocks did and add a predictive credit
+            // based yield to determine if we should yield or fall through to block
             if self.state.load(Ordering::Acquire) & WriterState::COMPLETE != 0 {
                 return;
             }
@@ -127,36 +126,28 @@ mod tests {
     }
 
     #[test]
-    fn waiting_and_parking() {
-        let scope = thread::scope(|t| {
-            //
-            // Make the writer and batch inside the thread scope
-            let batch = Batch::new();
-            let mut writer = Writer::new(&batch);
+    fn waiting_and_blocking() {
+        let batch = Batch::new();
+        let writer = Writer::new(&batch);
 
-            let write_ptr = AtomicPtr::new(&raw mut writer);
-
-            t.spawn(move || {
+        thread::scope(|t| {
+            t.spawn(|| {
                 thread::sleep(Duration::from_millis(1000));
 
-                //
-                let w = write_ptr.load(Ordering::Acquire);
+                // In order for us to be able to use the writer as reference here and not get into borrow or thread boundry compilation mayhem
+                // we must ensure that Writer lives for longer than the thread scope
+                writer
+                    .state
+                    .fetch_or(WriterState::COMPLETE, Ordering::Release);
 
-                unsafe {
-                    (*w).state
-                        .fetch_or(WriterState::COMPLETE, Ordering::Release)
-                };
-                //
-                unsafe {
-                    (*w).thread_handle.unpark();
+                if writer.state.load(Ordering::Acquire) & WriterState::LOCKED_WAITING != 0 {
+                    writer.thread_handle.unpark();
                 }
             });
-
             println!("Blocking");
             writer.wait_and_block();
             println!("Unblocked");
-
-            // Here the follower can block and wait
+            assert!(writer.state.load(Ordering::Acquire) & WriterState::COMPLETE != 0);
         });
     }
 }
