@@ -99,7 +99,7 @@ impl Writer {
     }
 
     #[inline]
-    fn wait_and_block(&self) {
+    pub(super) fn wait_and_block(&self) {
         self.state
             .fetch_or(WriterState::LOCKED_WAITING, Ordering::Release);
 
