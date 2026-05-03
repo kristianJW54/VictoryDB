@@ -30,10 +30,11 @@ impl WriterState {
 ///
 /// Caller must guarantee batch outlives this Writer
 pub(crate) struct Writer {
-    batch: NonNull<Batch>,
-    state: AtomicU8,
-    next: AtomicPtr<Writer>,
-    thread_handle: Thread,
+    pub(super) batch: NonNull<Batch>,
+    pub(super) state: AtomicU8,
+    pub(super) next: AtomicPtr<Writer>,
+    pub(super) link_older: AtomicPtr<Writer>,
+    pub(super) thread_handle: Thread,
 }
 
 // SAFETY: Writer fields accessed cross-thread are either atomic
@@ -46,6 +47,7 @@ impl Writer {
             batch: NonNull::from(batch),
             state: AtomicU8::new(0),
             next: AtomicPtr::new(ptr::null_mut()),
+            link_older: AtomicPtr::new(ptr::null_mut()),
             thread_handle: thread::current(),
         }
     }
@@ -101,28 +103,33 @@ impl Writer {
         self.state
             .fetch_or(WriterState::LOCKED_WAITING, Ordering::Release);
 
-        while self.state.load(Ordering::Acquire) & WriterState::COMPLETE == 0 {
+        while self.state.load(Ordering::Acquire) & (WriterState::COMPLETE | WriterState::LEADER)
+            == 0
+        {
             thread::park();
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_leader(&self) -> bool {
+        self.state.load(Ordering::Relaxed) & WriterState::LEADER != 0
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{thread::scope, time::Duration};
 
     use super::*;
 
     #[test]
     fn writer_state() {
-        // Am i a follower
-        let follow = WriterState::FOLLOWER;
+        let batch = Batch::new();
+        let writer = Writer::new(&batch);
 
-        println!("{:08b}", follow);
-        println!("{:08b}", WriterState::FOLLOWER);
-        println!("{:08b}", follow | WriterState::FOLLOWER);
+        writer.state.store(WriterState::LEADER, Ordering::Relaxed);
 
-        println!("follower? -> {}", follow & WriterState::FOLLOWER != 0);
+        assert!(writer.is_leader());
     }
 
     #[test]
@@ -144,10 +151,33 @@ mod tests {
                     writer.thread_handle.unpark();
                 }
             });
-            println!("Blocking");
             writer.wait_and_block();
-            println!("Unblocked");
             assert!(writer.state.load(Ordering::Acquire) & WriterState::COMPLETE != 0);
+        });
+    }
+
+    #[test]
+    fn follower_promoted_to_leader() {
+        let batch = Batch::new();
+        let writer = Writer::new(&batch);
+
+        thread::scope(|t| {
+            t.spawn(|| {
+                thread::sleep(Duration::from_millis(10));
+                // simulate current leader handing off leadership
+                writer
+                    .state
+                    .fetch_or(WriterState::LEADER, Ordering::Release);
+                if writer.state.load(Ordering::Acquire) & WriterState::LOCKED_WAITING != 0 {
+                    writer.thread_handle.unpark();
+                }
+            });
+
+            writer.wait_and_block();
+
+            // assert woke as leader not complete
+            assert!(writer.state.load(Ordering::Acquire) & WriterState::LEADER != 0);
+            assert!(writer.state.load(Ordering::Acquire) & WriterState::COMPLETE == 0);
         });
     }
 }
