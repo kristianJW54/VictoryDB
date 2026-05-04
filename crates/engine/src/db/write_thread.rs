@@ -1,5 +1,3 @@
-use super::write_batch::Batch;
-
 // db.write(batch)
 //     │
 //     ├─ create Writer node on stack
@@ -35,13 +33,30 @@ use super::write_batch::Batch;
 // and a new leader starts either when newest_writer_ is set to null
 // or when the next writer's state is explicitly set to STATE_GROUP_LEADER
 
+use std::sync::atomic::Ordering;
 use std::{ptr, sync::atomic::AtomicPtr};
 
+use crate::db::writer::WriterState;
+
+use super::write_batch::Batch;
 use super::writer::Writer;
 
 /// WriteThread is the coordination mechanism for multiple writes. Each calling thread will creater a writer holding a batch of operations and try to join
 /// the write thread queue. The write thread will group multiple writes and determine leader/followers.
 /// Once complete, it will signal to followers and drop
+///
+///
+/// SAFETY:
+///
+/// WriteThread stores raw pointers to stack-owned Writer nodes.
+///
+/// A Writer passed to join() must remain alive until join() returns. join()
+/// may publish the pointer to other threads, but it will not return for a
+/// follower until the writer has reached a terminal state, and it will not
+/// allow the writer to be dropped while another thread may still access it.
+///
+/// Therefore any Writer pointer reachable from the queue points to a live
+/// Writer.
 pub(crate) struct WriteThread {
     head: AtomicPtr<Writer>,
 }
@@ -66,10 +81,55 @@ impl WriteThread {
         }
     }
 
+    fn link_writer(&self, writer: *mut Writer) -> bool {
+        debug_assert!(unsafe { (*writer).state.load(Ordering::Relaxed) & WriterState::INIT != 0 });
+
+        let mut current_newest_writer = self.head.load(Ordering::Relaxed);
+
+        loop {
+            // XXX: We can put write stall logic and control flow here
+
+            // Link to the previously newest writer.
+            // Produces a newest->older intrusive stack.
+            unsafe {
+                (*writer)
+                    .link_older
+                    .store(current_newest_writer, Ordering::Relaxed);
+            }
+
+            // CAS on current newest writer
+            match self.head.compare_exchange_weak(
+                current_newest_writer,
+                writer,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(ptr) => return ptr.is_null(),
+                Err(ptr) => {
+                    current_newest_writer = ptr;
+                    continue;
+                }
+            }
+        }
+    }
+
     pub(crate) fn join(&self, writer: &Writer) {
-        // TODO: Need to understand how we cut the linked list and then reverse it to give to the leader from oldest to newest
-        let _ = writer;
-        todo!()
+        //
+        // Raw pointer form used for the intrusive queue. Lifetime is governed by
+        // WriteThread::join's stack-writer invariant.
+        let w = ptr::from_ref(writer).cast_mut();
+
+        let linked_writer = self.link_writer(w);
+
+        if linked_writer {
+            debug_assert!(writer.is_leader());
+
+            // Continue as Leader
+            //
+            //
+        } else {
+            writer.wait();
+        }
     }
 }
 
@@ -77,14 +137,14 @@ impl WriteThread {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::writer::{self, WriterState};
+    use crate::db::writer::WriterState;
 
     use super::*;
-    use std::f64::consts::PI;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::thread::{self};
     use std::time::Duration;
 
+    // TODO: Need to make this deterministic with while loop so we can enforce thread join order
     #[test]
     fn writer_follower_to_leader() {
         // XXX: Replace naive implementation with writer_thread methods - eventually move to integration test
@@ -125,7 +185,7 @@ mod tests {
                 // normally we'd traverse the linked list and process the group before either nulling the global head or
                 // assigning new leader
 
-                let follower = writer_1.link_older.load(Ordering::Acquire);
+                let follower = writer_1.group_next.load(Ordering::Acquire);
 
                 assert!(!follower.is_null());
                 unsafe {
@@ -155,19 +215,14 @@ mod tests {
                         // We have pointer to the leader - we need to set it's back_link to us
                         unsafe {
                             (*ptr)
-                                .link_older
+                                .group_next
                                 .store(&raw mut writer_2, Ordering::Relaxed);
                         }
                         // Set our next pointer to ptr we just stole from group head
-                        writer_2.next.store(ptr, Ordering::Relaxed);
+                        writer_2.link_older.store(ptr, Ordering::Relaxed);
                     }
                     Err(_) => panic!(),
                 }
-
-                // Set ourselves as the follower
-                writer_2
-                    .state
-                    .fetch_or(WriterState::FOLLOWER, Ordering::Relaxed);
 
                 // Now block
                 writer_2.wait_and_block();
@@ -180,8 +235,8 @@ mod tests {
                     thread::sleep(Duration::from_millis(1000));
 
                     // assert out back link is not null
-                    assert!(!writer_2.link_older.load(Ordering::Relaxed).is_null());
-                    let follower = writer_2.link_older.load(Ordering::Relaxed);
+                    assert!(!writer_2.group_next.load(Ordering::Relaxed).is_null());
+                    let follower = writer_2.group_next.load(Ordering::Relaxed);
 
                     unsafe {
                         (*follower)
@@ -215,19 +270,14 @@ mod tests {
                         // We have pointer to the leader - we need to set it's back_link to us
                         unsafe {
                             (*ptr)
-                                .link_older
+                                .group_next
                                 .store(&raw mut writer_3, Ordering::Release);
                         }
                         // Set our next pointer to ptr we just stole from group head
-                        writer_3.next.store(ptr, Ordering::Release);
+                        writer_3.link_older.store(ptr, Ordering::Release);
                     }
                     Err(_) => panic!(),
                 }
-
-                // Set ourselves as the follower
-                writer_3
-                    .state
-                    .fetch_or(WriterState::FOLLOWER, Ordering::Release);
 
                 // Now block
                 writer_3.wait_and_block();

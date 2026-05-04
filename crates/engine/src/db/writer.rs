@@ -12,9 +12,8 @@ pub(super) struct WriterState;
 impl WriterState {
     pub const INIT: u8 = 1 << 0;
     pub const LEADER: u8 = 1 << 1;
-    pub const FOLLOWER: u8 = 1 << 2;
-    pub const LOCKED_WAITING: u8 = 1 << 3;
-    pub const COMPLETE: u8 = 1 << 4;
+    pub const LOCKED_WAITING: u8 = 1 << 2;
+    pub const COMPLETE: u8 = 1 << 3;
 }
 
 /// Writer is the calling threads write which holds a batch of operations.
@@ -32,13 +31,21 @@ impl WriterState {
 pub(crate) struct Writer {
     pub(super) batch: NonNull<Batch>,
     pub(super) state: AtomicU8,
-    pub(super) next: AtomicPtr<Writer>,
     pub(super) link_older: AtomicPtr<Writer>,
+    pub(super) group_next: AtomicPtr<Writer>,
     pub(super) thread_handle: Thread,
 }
 
-// SAFETY: Writer fields accessed cross-thread are either atomic
-// or protected by the thread parking mechanism
+// SAFETY:
+//
+// Writer may be shared across threads because all fields mutated after
+// publication use interior mutability: AtomicU8, AtomicPtr, Thread, etc.
+//
+// The batch pointer is non-owning and must point to immutable Batch data
+// that outlives the Writer.
+//
+// Writer itself does not guarantee queue lifetime. That invariant is owned
+// by WriteThread.
 unsafe impl Sync for Writer {}
 
 impl Writer {
@@ -46,8 +53,8 @@ impl Writer {
         Self {
             batch: NonNull::from(batch),
             state: AtomicU8::new(0),
-            next: AtomicPtr::new(ptr::null_mut()),
             link_older: AtomicPtr::new(ptr::null_mut()),
+            group_next: AtomicPtr::new(ptr::null_mut()),
             thread_handle: thread::current(),
         }
     }
@@ -60,7 +67,7 @@ impl Writer {
     /// demand and pass in it's local state to the Mutex in order to be signalled.
     pub(crate) fn wait(&self) {
         debug_assert!(
-            self.state.load(std::sync::atomic::Ordering::Relaxed) & WriterState::FOLLOWER != 0
+            self.state.load(std::sync::atomic::Ordering::Relaxed) & WriterState::INIT != 0
         );
 
         // We have joined on the write_thread and are a follower in the write group. We must wait until the leader is done with the write.
