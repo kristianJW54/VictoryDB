@@ -58,7 +58,7 @@ use super::writer::Writer;
 /// Therefore any Writer pointer reachable from the queue points to a live
 /// Writer.
 pub(crate) struct WriteThread {
-    head: AtomicPtr<Writer>,
+    newest_writer: AtomicPtr<Writer>,
 }
 
 impl Default for WriteThread {
@@ -77,14 +77,14 @@ impl WriteThread {
 
     pub(crate) fn new() -> Self {
         Self {
-            head: AtomicPtr::new(ptr::null_mut()),
+            newest_writer: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
     fn link_writer(&self, writer: *mut Writer) -> bool {
         debug_assert!(unsafe { (*writer).state.load(Ordering::Relaxed) & WriterState::INIT != 0 });
 
-        let mut current_newest_writer = self.head.load(Ordering::Relaxed);
+        let mut current_newest_writer = self.newest_writer.load(Ordering::Relaxed);
 
         loop {
             // XXX: We can put write stall logic and control flow here
@@ -98,7 +98,7 @@ impl WriteThread {
             }
 
             // CAS on current newest writer
-            match self.head.compare_exchange_weak(
+            match self.newest_writer.compare_exchange_weak(
                 current_newest_writer,
                 writer,
                 Ordering::AcqRel,
@@ -110,6 +110,51 @@ impl WriteThread {
                     continue;
                 }
             }
+        }
+    }
+
+    // Example:
+    // [newest]                        [oldest/leader]
+    //    4-----------3-----------2-----------1
+    //  Head  ----> Next  ----> Next  ----> Next
+    //      <--------┚  <--------┚  <--------┚
+    //      group_next   group_next  group_next
+    //
+    /// Builds the execution chain for the current write group.
+    ///
+    /// Starting from the snapshot of the newest writer, this walks the
+    /// intrusive `older` chain (`newest -> ... -> oldest`) established
+    /// during `join()`.
+    ///
+    /// As each writer is visited, its `group_next` pointer is set to the
+    /// previously visited writer, effectively materializing the logical
+    /// execution order of the group (`oldest -> ... -> newest`).
+    ///
+    /// Traversal continues until the oldest writer in the group is reached,
+    /// identified by `older == null`.
+    ///
+    /// This does not modify the global queue or discover newly joined
+    /// writers. It operates only on the leader's snapshot of the group.
+    fn set_new_links(&self, group_newest_writer: *mut Writer) {
+        //
+        let mut current = group_newest_writer;
+
+        loop {
+            let older = unsafe { (*current).link_older.load(Ordering::Relaxed) };
+
+            // If the older Writer is null (reached end) or the older Writers next link is set already we break
+            if older.is_null()
+                || !(unsafe { (*older).group_next.load(Ordering::Relaxed).is_null() })
+            {
+                debug_assert!(
+                    (older.is_null())
+                        || unsafe { (*older).group_next.load(Ordering::Relaxed) == current }
+                );
+                break;
+            }
+
+            unsafe { (*older).group_next.store(current, Ordering::Relaxed) };
+            current = older;
         }
     }
 
