@@ -33,6 +33,7 @@
 // and a new leader starts either when newest_writer_ is set to null
 // or when the next writer's state is explicitly set to STATE_GROUP_LEADER
 
+use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::{ptr, sync::atomic::AtomicPtr};
 
@@ -40,6 +41,26 @@ use crate::db::writer::WriterState;
 
 use super::write_batch::Batch;
 use super::writer::Writer;
+
+pub(crate) struct WriteGroup {
+    leader: NonNull<Writer>,
+    last_writer: *mut Writer,
+    assigned_seq_no: u64,
+    size: u64,
+    writers: u32,
+}
+
+impl WriteGroup {
+    fn new(leader: *mut Writer) -> Self {
+        assert!(!leader.is_null());
+        Self {
+            leader: unsafe { NonNull::new_unchecked(leader) },
+            last_writer: ptr::null_mut(),
+            assigned_seq_no: 0,
+            writers: 1,
+        }
+    }
+}
 
 /// WriteThread is the coordination mechanism for multiple writes. Each calling thread will creater a writer holding a batch of operations and try to join
 /// the write thread queue. The write thread will group multiple writes and determine leader/followers.
@@ -74,6 +95,9 @@ impl WriteThread {
     pub(crate) const WAIT_PAUSE_ITERATIONS: usize = 200;
     // How many time do we want to iterate and Thread::yield()
     pub(crate) const YIELD_PAUSE_ITERATIONS: usize = 64;
+
+    pub(crate) const MAX_BATCH_SIZE_PER_GROUP: usize = 1048;
+    pub(crate) const MIN_BATCH_SIZE_PER_GROUP: usize = Self::MAX_BATCH_SIZE_PER_GROUP / 8;
 
     pub(crate) fn new() -> Self {
         Self {
@@ -158,6 +182,23 @@ impl WriteThread {
         }
     }
 
+    // Method to enter group as leader
+    // https://github.com/facebook/rocksdb/blob/763401b5/db/write_thread.cc#L440
+    pub(crate) fn EnterBatchGroup(&self, leader: NonNull<Writer>, write_group: &mut WriteGroup) {
+        //
+        //
+        // Limit the max size if the leader's batch is smaller than MIN_BATCH_GROUP_SIZE so that small writes are not
+        // slowed by group mechanics
+        // TODO: Add size limiting check
+
+        // Get the newest_writer to use to link newer writers in the group
+        let newest_writer = self.newest_writer.load(Ordering::Acquire);
+
+        self.set_new_links(newest_writer);
+
+        todo!()
+    }
+
     pub(crate) fn join(&self, writer: &Writer) {
         //
         // Raw pointer form used for the intrusive queue. Lifetime is governed by
@@ -168,6 +209,8 @@ impl WriteThread {
 
         if linked_writer {
             debug_assert!(writer.is_leader());
+
+            let mut write_group = WriteGroup::new(w);
 
             // Continue as Leader
             //
