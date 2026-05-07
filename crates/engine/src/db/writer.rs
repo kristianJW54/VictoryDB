@@ -4,7 +4,10 @@ use std::{
     thread::{self, Thread},
 };
 
-use crate::db::{write_batch::Batch, write_thread::WriteThread};
+use crate::db::{
+    write_batch::Batch,
+    write_thread::{WriteGroup, WriteThread},
+};
 
 #[non_exhaustive]
 pub(super) struct WriterState;
@@ -31,9 +34,23 @@ impl WriterState {
 pub(crate) struct Writer {
     pub(super) batch: NonNull<Batch>,
     pub(super) state: AtomicU8,
+    // Writers which entered the queue before this Writer [newest_writer -> W3 -> W2 -> W1 -> leader]
     pub(super) link_older: AtomicPtr<Writer>,
+    // Writers which are ordered oldest->newest
     pub(super) group_next: AtomicPtr<Writer>,
+    // Thread handle to unpark waiting followers
     pub(super) thread_handle: Thread,
+    pub(super) write_group: *const WriteGroup,
+    // Options
+    // seq_no_first: u64,
+    // status: WriterStatus,
+    // sync: bool,
+    // slow_down: bool,
+    // disable_wal: bool,
+    // deep_wait: bool, Was this parked and did the wait reach stage 3?
+    // wal_log_num: u64,
+    // mem_log_num: u64,
+    //
 }
 
 // SAFETY:
@@ -56,6 +73,7 @@ impl Writer {
             link_older: AtomicPtr::new(ptr::null_mut()),
             group_next: AtomicPtr::new(ptr::null_mut()),
             thread_handle: thread::current(),
+            write_group: ptr::null(),
         }
     }
 

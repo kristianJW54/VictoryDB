@@ -57,7 +57,8 @@ impl WriteGroup {
             leader: unsafe { NonNull::new_unchecked(leader) },
             last_writer: ptr::null_mut(),
             assigned_seq_no: 0,
-            writers: 1,
+            size: 0,
+            writers: 0,
         }
     }
 }
@@ -187,14 +188,47 @@ impl WriteThread {
     pub(crate) fn EnterBatchGroup(&self, leader: NonNull<Writer>, write_group: &mut WriteGroup) {
         //
         //
+
+        let size = unsafe { leader.as_ref().batch.as_ref().batch_size() };
+
         // Limit the max size if the leader's batch is smaller than MIN_BATCH_GROUP_SIZE so that small writes are not
         // slowed by group mechanics
-        // TODO: Add size limiting check
+        let mut max_size = WriteThread::MAX_BATCH_SIZE_PER_GROUP;
+        if size <= WriteThread::MAX_BATCH_SIZE_PER_GROUP {
+            max_size = size + WriteThread::MIN_BATCH_SIZE_PER_GROUP;
+        }
+
+        write_group.size = 1;
+        write_group.writers = 1;
+        // Set last writer as leader for now until we process next writers in the group and reach newest_writer (last in group) to then set last_writer.
+        write_group.last_writer = leader.as_ptr();
 
         // Get the newest_writer to use to link newer writers in the group
         let newest_writer = self.newest_writer.load(Ordering::Acquire);
 
         self.set_new_links(newest_writer);
+
+        // Traverse the WriteGroup in contextual order (oldest->newest) and decide if we need to remove writers and append to end (next group)
+
+        let w = leader.as_ptr();
+        let we = leader.as_ptr();
+        let r: *mut Writer = ptr::null_mut();
+        let re: *mut Writer = ptr::null_mut();
+
+        while w != newest_writer {
+            //
+            let w = unsafe { (*w).group_next.load(Ordering::Relaxed) };
+
+            // TODO: Finish from here
+
+            // compatable check
+            // append rejected_list
+            // fix r_list links
+            // update write group
+            //
+
+            break;
+        }
 
         todo!()
     }

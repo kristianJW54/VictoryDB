@@ -89,12 +89,8 @@ use crate::utils::{self, var_int::VarInt};
 // WAL sync happens concurrently with applying to the memtable
 // --------------------------------------------------------------------------------------
 //
-// As a default, a batch is initialised with 1KB (taken from Pebble - https://github.com/cockroachdb/pebble/blob/a3b8dfe9/batch.go#L38)
 //
 //
-const DEFAULT_BATCH_INIT_SIZE: usize = 1 << 10; // NOTE: This is where we'd like to get to if we pool batches
-const MAX_BATCH_SIZE: usize = 1 << 20;
-const SINGLE_BATCH_INIT_SIZE: usize = 1 << 8; // NOTE: For now we start small (cache line) and grow if needed as we allocate on each batch for now
 
 const SEQ_NO_OFFSET: usize = 0; // seq starts at byte 0
 const BATCH_COUNT_OFFSET: usize = size_of::<u64>(); // count starts at byte 8
@@ -156,6 +152,16 @@ pub(crate) struct Batch {
 //
 
 impl Batch {
+    //
+    // As a default, a batch is initialised with 1KB (taken from Pebble - https://github.com/cockroachdb/pebble/blob/a3b8dfe9/batch.go#L38)
+    pub(crate) const DEFAULT_BATCH_INIT_SIZE: usize = 1 << 10; // NOTE: This is where we'd like to get to if we pool batches
+    //
+    pub(crate) const MAX_BATCH_SIZE: usize = 1 << 20;
+    //
+    pub(crate) const SINGLE_BATCH_INIT_SIZE: usize = 1 << 8; // NOTE: For now we start small (cache line) and grow if needed as we allocate on each batch for now
+    //
+    //
+    //
     /// Batch::new() is used to explicitly create a new batch for multiple operations. If a single operation is needed then rely on regular call to DB instead
     /// as DB will internally create a single operation batch with an optimal buffer size.
     /// Explicit calls to Batch::new() will create a larger initial buffer to account for multiple operations
@@ -172,23 +178,23 @@ impl Batch {
     ///
     /// ```
     pub(crate) fn new() -> Self {
-        let mut data = Vec::with_capacity(DEFAULT_BATCH_INIT_SIZE);
+        let mut data = Vec::with_capacity(Self::DEFAULT_BATCH_INIT_SIZE);
         data.extend_from_slice(&[0u8; HEADER_SIZE]);
         Self {
             data,
-            max_bytes: MAX_BATCH_SIZE,
+            max_bytes: Self::MAX_BATCH_SIZE,
         }
     }
 
     pub(crate) fn new_with_capacity(cap: usize) -> Self {
         // NOTE: This, I don't like. Would like to limit big batches and maybe ensure the caller
         // knows that using max batches will encur direct flushable memtables
-        assert!(cap <= MAX_BATCH_SIZE);
+        assert!(cap <= Self::MAX_BATCH_SIZE);
         let mut data = Vec::with_capacity(cap);
         data.extend_from_slice(&[0u8; HEADER_SIZE]);
         Self {
             data,
-            max_bytes: MAX_BATCH_SIZE,
+            max_bytes: Self::MAX_BATCH_SIZE,
         }
     }
 
@@ -232,6 +238,10 @@ impl Batch {
                 self.data[BATCH_COUNT_OFFSET..BATCH_COUNT_OFFSET + 4].as_ptr(),
             )
         }
+    }
+
+    pub(crate) fn batch_size(&self) -> usize {
+        self.data.len()
     }
 
     // TOOD: Apply_batch()
