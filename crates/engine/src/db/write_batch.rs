@@ -244,6 +244,10 @@ impl Batch {
         self.data.len()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.data.len() == 0
+    }
+
     // TOOD: Apply_batch()
 
     pub(crate) fn apply_batch(&self /*column family resolver, seq_no, flush_scheduler */) {}

@@ -120,9 +120,7 @@ impl WriteThread {
             // # SAFETY:
             // We check that writer is not null so we are safe to dereference
             unsafe {
-                (*writer)
-                    .link_older
-                    .store(current_newest_writer, Ordering::Relaxed);
+                *(*writer).link_older.get() = current_newest_writer;
             }
 
             // CAS on current newest writer
@@ -173,24 +171,23 @@ impl WriteThread {
         loop {
             // # SAFTEY:
             // current is not null so we are safe to load link_older
-            let older = unsafe { (*current).link_older.load(Ordering::Relaxed) };
+            let older = unsafe { *(*current).link_older.get() };
 
             // If the older Writer is null (reached end) or the older Writers next link is set already we break
             if older.is_null()
                 // # SAFETY:
                 // if older was null we will have hit the first conditional check, therefore, older is safe to dereference here
-                || !(unsafe { (*older).group_next.load(Ordering::Relaxed).is_null() })
+                || !(unsafe { (*older).group_next.get().is_null() })
             {
                 debug_assert!(
-                    (older.is_null())
-                        || unsafe { (*older).group_next.load(Ordering::Relaxed) == current }
+                    (older.is_null()) || unsafe { *(*older).group_next.get() == current }
                 );
                 break;
             }
 
             // # SAFETY:
             // old is not null so we are safe to access the group_next to store current
-            unsafe { (*older).group_next.store(current, Ordering::Relaxed) };
+            unsafe { *(*older).group_next.get() = current };
             current = older;
         }
     }
@@ -201,8 +198,10 @@ impl WriteThread {
         //
         //
 
-        // # SAFTEY:
-        // leader is NonNull, batch is NonNull. leader Writer remains active on the stack and outlives this method
+        // SAFETY:
+        // `leader` is `NonNull`, and `batch` is initialized during writer
+        // construction and immutable after publication. Reading batch metadata
+        // does not race with any concurrent mutation.
         let size = unsafe { leader.as_ref().batch.as_ref().batch_size() };
 
         // Limit the max size if the leader's batch is smaller than MIN_BATCH_GROUP_SIZE so that small writes are not
@@ -224,18 +223,81 @@ impl WriteThread {
 
         // Traverse the WriteGroup in contextual order (oldest->newest) and decide if we need to remove writers and append to end (next group)
 
-        let w = leader.as_ptr();
-        let we = leader.as_ptr();
-        let r: *mut Writer = ptr::null_mut();
-        let re: *mut Writer = ptr::null_mut();
+        let mut w = leader.as_ptr();
+        let mut we = leader.as_ptr();
+        let mut r: *mut Writer = ptr::null_mut();
+        let mut re: *mut Writer = ptr::null_mut();
 
         while w != newest_writer {
+            debug_assert!(!unsafe { *(*w).group_next.get() }.is_null());
             //
-            // # SAFTEY:
-            // We know that writer is NonNull and that it is safe to dereference because the stack allocated writer will oulive this method
-            let w = unsafe { (*w).group_next.load(Ordering::Relaxed) };
+            // SAFETY:
+            // `w` is part of the current materialized execution chain.
+            // `group_next` has been initialized by `set_new_links()` before
+            // entering this loop, so reading it yields either the next writer
+            // in this group or null at the group boundary.
+            w = unsafe { *(*w).group_next.get() };
 
-            // TODO: Finish from here
+            // Compatibility checks
+
+            // SAFETY:
+            //
+            // `w` traverses the materialized execution chain for this batch group,
+            // starting at `leader` and advancing through `group_next` until the
+            // snapshot `newest_writer` is reached.
+            //
+            // All writers in this chain remain live while linked into `WriteThread`,
+            // and writer metadata (`batch`, `sync`, write options) is immutable after
+            // publication, so reading these fields is race-free.
+            //
+            // This method is executed by the sole current batch-group leader. No other
+            // thread mutates `link_older` or `group_next` for writers in this selected
+            // group while this loop is active.
+            //
+            // Therefore it is sound to:
+            //
+            // - traverse writers via `group_next`
+            // - inspect writer metadata for compatibility checks
+            // - splice rejected writers out of the execution chain by rewiring
+            //   `link_older` and `group_next`
+            // - append rejected writers to `r_list` for handoff into the next group.
+            unsafe {
+                // Don't group empty batches
+                if ((*w).batch.as_ref().is_empty() ||
+                    // Remove batches which breach our max size
+                    (*w).batch.as_ref().batch_size() > max_size) ||
+                    // If sync modes do not match with leader, remove
+                    (*w).sync != (*leader.as_ptr()).sync
+                // TODO: Add other conditions
+                {
+                    //
+                    // Remove from the list by
+                    //
+                    // We take the next and previous writer's of current and re-link them so that they each skip the current writer
+                    //
+                    // Linking the current's older writer to current's newer writer so current's older skips current
+                    // W4 --------> W3 --------> W2 --------> W1
+                    //              |           |           |
+                    //         link_newer <- current -> link_older
+                    //               <---------<------------┚
+                    //               link so W1 skips current
+
+                    let older = *(*w).link_older.get();
+                    let newer = *(*w).group_next.get();
+
+                    // Set the current's older writer's group_next to the writer after current so current is skipped
+                    *(*older).group_next.get() = newer;
+
+                    // Do the inverse of above
+                    if !newer.is_null() {
+                        *(*newer).link_older.get() = older;
+                    }
+
+                    // Insert current into r_list
+
+                    break;
+                };
+            }
 
             // compatable check
             // append rejected_list
@@ -323,7 +385,7 @@ mod tests {
                 // normally we'd traverse the linked list and process the group before either nulling the global head or
                 // assigning new leader
 
-                let follower = writer_1.group_next.load(Ordering::Acquire);
+                let follower = unsafe { *writer_1.group_next.get() };
 
                 assert!(!follower.is_null());
                 unsafe {
@@ -351,13 +413,9 @@ mod tests {
                 ) {
                     Ok(ptr) => {
                         // We have pointer to the leader - we need to set it's back_link to us
-                        unsafe {
-                            (*ptr)
-                                .group_next
-                                .store(&raw mut writer_2, Ordering::Relaxed);
-                        }
+                        unsafe { *(*ptr).group_next.get() = &raw mut writer_2 }
                         // Set our next pointer to ptr we just stole from group head
-                        writer_2.link_older.store(ptr, Ordering::Relaxed);
+                        unsafe { *writer_2.link_older.get() = ptr }
                     }
                     Err(_) => panic!(),
                 }
@@ -373,8 +431,8 @@ mod tests {
                     thread::sleep(Duration::from_millis(1000));
 
                     // assert out back link is not null
-                    assert!(!writer_2.group_next.load(Ordering::Relaxed).is_null());
-                    let follower = writer_2.group_next.load(Ordering::Relaxed);
+                    assert!(!unsafe { *writer_2.group_next.get() }.is_null());
+                    let follower = unsafe { *writer_2.group_next.get() };
 
                     unsafe {
                         (*follower)
@@ -407,12 +465,10 @@ mod tests {
                     Ok(ptr) => {
                         // We have pointer to the leader - we need to set it's back_link to us
                         unsafe {
-                            (*ptr)
-                                .group_next
-                                .store(&raw mut writer_3, Ordering::Release);
+                            *(*ptr).group_next.get() = &raw mut writer_3;
                         }
                         // Set our next pointer to ptr we just stole from group head
-                        writer_3.link_older.store(ptr, Ordering::Release);
+                        unsafe { *writer_3.link_older.get() = ptr };
                     }
                     Err(_) => panic!(),
                 }
