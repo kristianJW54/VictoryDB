@@ -263,9 +263,9 @@ impl WriteThread {
             // - append rejected writers to `r_list` for handoff into the next group.
             unsafe {
                 // Don't group empty batches
-                if ((*w).batch.as_ref().is_empty() ||
+                if (*w).batch.as_ref().is_empty() ||
                     // Remove batches which breach our max size
-                    (*w).batch.as_ref().batch_size() > max_size) ||
+                    (*w).batch.as_ref().batch_size() > max_size ||
                     // If sync modes do not match with leader, remove
                     (*w).sync != (*leader.as_ptr()).sync
                 // TODO: Add other conditions
